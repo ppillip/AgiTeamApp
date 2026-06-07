@@ -1,0 +1,13 @@
+[project]
+name = "agiteamapp-webgui-backend"
+version = "0.1.0"
+description = "AgiTeamApp WebGUI Backend (DV-20) — FastAPI message channel, chat store, artifact browser"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

@@ -1,0 +1,101 @@
+"""애플리케이션 설정 (DS-60 §DV-50 설정 인계).
+
+환경변수 prefix: WEBGUI_
+"""
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _repo_root() -> Path:
+    """config.py 위치: <repo>/system/AgiTeamApp/backend/app/config.py → parents[4] == <repo>."""
+    return Path(__file__).resolve().parents[4]
+
+
+def _default_artifacts_root() -> Path:
+    """레포 기준 documents/products/AgiTeamApp 자동 추정."""
+    return _repo_root() / "documents" / "products" / "AgiTeamApp"
+
+
+def _default_projects_base() -> Path:
+    """프로젝트들이 모여있는 상위 디렉터리(예: ~/Projects). 기본 = <repo>의 부모."""
+    return _repo_root().parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="WEBGUI_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # 저장소
+    database_url: str = "postgresql+psycopg://webgui:webgui@localhost:5432/webgui"
+
+    # 모니터 대상 프로젝트
+    project_id: str = "AgiTeamApp"
+
+    # 산출물 allowlist 루트 (DS-20 §13.1 / DS-60 §11.2)
+    artifacts_root: Path = Field(default_factory=_default_artifacts_root)
+
+    # 인증 (DS-40 §3.2). 미설정이면 로컬 dev 모드(인증 생략).
+    api_token: str | None = None
+    collector_token: str | None = None
+
+    # cmux 연동 (DS-60 §5.3). PATH 의존 금지 — 절대경로 기본값 (제우스 2026-06-07).
+    cmux_bin: str = "/Applications/cmux.app/Contents/Resources/bin/cmux"
+    cmux_timeout_seconds: float = 15.0
+
+    # 디스커버리/수집 (제우스 2026-06-07 확정)
+    # 프로젝트 루트 해소: project_roots(JSON 매핑) 우선, 없으면 projects_base_dir/<project_id>
+    projects_base_dir: Path = Field(default_factory=_default_projects_base)
+    project_roots_json: str | None = None      # 예: '{"Panthea":"/abs/Panthea"}'
+    agiteam_logs_subdir: str = ".agiteam/logs"
+    discovery_poll_seconds: float = 5.0
+    logtail_poll_seconds: float = 2.0
+    enable_background: bool = True             # 백그라운드 폴링 루프 on/off (테스트 시 off)
+
+    # 파일/렌더 제한 (DS-20 §13.5 / DS-40 §17.6)
+    max_inline_bytes: int = 1_048_576          # 1 MiB: md inline 한계
+    max_stream_bytes: int = 52_428_800         # 50 MiB: pdf stream 한계
+    max_tree_nodes: int = 2_000                # 트리 1회 응답 노드 상한
+    max_tree_depth: int = 6
+    render_timeout_seconds: int = 30
+
+    @property
+    def auth_required(self) -> bool:
+        return self.api_token is not None
+
+    @property
+    def collector_auth_required(self) -> bool:
+        return self.collector_token is not None
+
+    @property
+    def artifacts_root_resolved(self) -> Path:
+        return Path(self.artifacts_root).resolve()
+
+    def project_root(self, project_id: str) -> Path:
+        """project_id → 파일시스템 루트. project_roots_json 우선, 없으면 base/<project_id>."""
+        import json
+
+        if self.project_roots_json:
+            try:
+                mapping = json.loads(self.project_roots_json)
+                if project_id in mapping:
+                    return Path(mapping[project_id]).resolve()
+            except (ValueError, TypeError):
+                pass
+        return (Path(self.projects_base_dir) / project_id).resolve()
+
+    def logs_dir(self, project_id: str) -> Path:
+        return self.project_root(project_id) / self.agiteam_logs_subdir
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: agiteamapp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agiteamapp}
+      POSTGRES_USER: ${POSTGRES_USER:-agiteamapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+    ports:
+      - "${AGITEAMAPP_DB_PORT:-15432}:5432"
+    volumes:
+      - agiteamapp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agiteamapp}
+      POSTGRES_USER: ${POSTGRES_USER:-agiteamapp}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    command:
+      - sh
+      - -c
+      - psql -h db -U "$${POSTGRES_USER:-agiteamapp}" -d "$${POSTGRES_DB:-agiteamapp}" -f /migrations/0001_init.sql
+    profiles:
+      - migrate
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agiteamapp-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WEBGUI_DATABASE_URL: ${WEBGUI_DATABASE_URL:-postgresql+psycopg://agiteamapp:change-me-local-only@db:5432/agiteamapp}
+      WEBGUI_PROJECT_ID: ${WEBGUI_PROJECT_ID:-Panthea}
+      WEBGUI_PROJECTS_BASE_DIR: ${WEBGUI_PROJECTS_BASE_DIR:-/projects}
+      WEBGUI_PROJECT_ROOTS_JSON: ${WEBGUI_PROJECT_ROOTS_JSON:-{"Panthea":"/projects/Panthea"}}
+      WEBGUI_AGITEAM_LOGS_SUBDIR: ${WEBGUI_AGITEAM_LOGS_SUBDIR:-.agiteam/logs}
+      WEBGUI_ARTIFACTS_ROOT: ${WEBGUI_ARTIFACTS_ROOT:-/projects/Panthea/documents/products/AgiTeamApp}
+      WEBGUI_ENABLE_BACKGROUND: ${WEBGUI_ENABLE_BACKGROUND:-false}
+    ports:
+      - "${AGITEAMAPP_BACKEND_PORT:-18000}:8000"
+    volumes:
+      - ../..:/projects/Panthea:ro
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: agiteamapp-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${AGITEAMAPP_FRONTEND_PORT:-1420}:80"
+
+volumes:
+  agiteamapp_pgdata:

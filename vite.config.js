@@ -1,31 +1,23 @@
-import { defineConfig } from "vite";
-import { sveltekit } from "@sveltejs/kit/vite";
-
-const host = process.env.TAURI_DEV_HOST;
+import { defineConfig, loadEnv } from "vite";
+import vue from "@vitejs/plugin-vue";
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
-  plugins: [sveltekit()],
-
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
-  clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
-  server: {
-    port: 1420,
-    strictPort: true,
-    host: host || false,
-    hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
-        }
-      : undefined,
-    watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  // 백엔드(FastAPI) 주소. 기본 localhost:8000. /api/* 를 백엔드로 프록시(WS 포함).
+  const target = env.VITE_API_PROXY || "http://localhost:8000";
+  return {
+    plugins: [vue()],
+    server: {
+      port: 1420,
+      strictPort: false,
+      proxy: {
+        "/api": {
+          target,
+          changeOrigin: true,
+          ws: true,
+        },
+      },
     },
-  },
-}));
+  };
+});
