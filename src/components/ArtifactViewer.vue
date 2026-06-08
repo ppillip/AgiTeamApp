@@ -4,6 +4,21 @@ import { store, closeViewer } from "../stores/monitor.js";
 import { fileStreamUrl } from "../api/index.js";
 import { renderMarkdown } from "../lib/markdown.js";
 
+// mermaid 동적 로드(초기 번들 분리 — md 뷰어에서 처음 다이어그램을 만날 때만 로드).
+// securityLevel:'strict' 로 mermaid 내부 XSS/스크립트 차단.
+let _mermaidPromise = null;
+function loadMermaid() {
+  if (!_mermaidPromise) {
+    _mermaidPromise = import("mermaid").then((m) => {
+      const mermaid = m.default || m;
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default" });
+      return mermaid;
+    });
+  }
+  return _mermaidPromise;
+}
+let _mermaidSeq = 0; // SVG id 충돌 방지용 단조 증가 시드
+
 // 산출물 뷰어 (S-05) — render_mode 별 분기(불칸 계약):
 //   markdown      → 경량 MD 렌더(무의존, XSS 안전)
 //   pdf_stream    → stream_url iframe 임베드
@@ -64,8 +79,50 @@ export default {
     "store.viewer.path"() {
       this.htmlMode = "render";
     },
+    // md 렌더 결과가 바뀌면 mermaid 다이어그램 변환(파일 전환·내용 갱신 포함)
+    mdHtml() {
+      this.renderMermaid();
+    },
   },
-  methods: { closeViewer },
+  mounted() {
+    this.renderMermaid();
+  },
+  methods: {
+    closeViewer,
+    // md 본문 내 .mermaid-block 들을 SVG 다이어그램으로 변환. 실패한 블록은 코드블록으로 폴백.
+    async renderMermaid() {
+      await this.$nextTick();
+      const root = this.$refs.mdBody;
+      if (!root) return;
+      const nodes = Array.from(root.querySelectorAll(".mermaid-block:not([data-done])"));
+      if (!nodes.length) return;
+      let mermaid;
+      try {
+        mermaid = await loadMermaid();
+      } catch {
+        return; // mermaid 로드 실패 → 블록은 텍스트 그대로 둠(깨짐 없음)
+      }
+      if (this.$refs.mdBody !== root) return; // 그 사이 파일 전환되면 폐기
+      for (const node of nodes) {
+        const src = node.getAttribute("data-src") || node.textContent || "";
+        const id = "mmd-" + ++_mermaidSeq;
+        try {
+          const { svg } = await mermaid.render(id, src);
+          node.innerHTML = svg;
+          node.setAttribute("data-done", "1");
+        } catch {
+          // 파싱 실패 → 원본을 코드블록으로 폴백(머메이드 소스라도 읽히게)
+          const pre = document.createElement("pre");
+          pre.className = "md-pre";
+          const codeEl = document.createElement("code");
+          codeEl.setAttribute("data-lang", "mermaid");
+          codeEl.textContent = src;
+          pre.appendChild(codeEl);
+          node.replaceWith(pre);
+        }
+      }
+    },
+  },
 };
 </script>
 
@@ -118,6 +175,7 @@ export default {
         <!-- markdown -->
         <div
           v-if="mode === 'markdown'"
+          ref="mdBody"
           class="md-body h-full overflow-y-auto nice-scroll"
           :class="big ? 'px-10 py-7 lg:px-16' : 'px-[22px] py-5'"
           v-html="mdHtml"

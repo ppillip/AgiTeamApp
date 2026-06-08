@@ -102,6 +102,26 @@ body {
 .md-body .md-pre code {
   font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 }
+/* mermaid 다이어그램 컨테이너: 중앙 정렬 + 가로 넘침 스크롤. 변환 전엔 소스 텍스트가
+   잠깐 보이지 않도록 모노폰트 회색으로(렌더되면 SVG 로 교체됨). */
+.md-body .mermaid-block {
+  margin: 1em 0;
+  overflow-x: auto;
+  text-align: center;
+  color: #a1a1aa;
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.md-body .mermaid-block[data-done] {
+  color: inherit;
+  font-family: inherit;
+  white-space: normal;
+}
+.md-body .mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
 .md-body .md-quote {
   border-left: 3px solid #f4d9bb;
   background: #fdf6ee;

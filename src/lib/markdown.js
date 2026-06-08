@@ -77,8 +77,16 @@ export function renderMarkdown(src) {
         i++;
       }
       i++; // 닫는 펜스 소비
+      const code = buf.join("\n");
+      // mermaid 펜스 → 다이어그램 컨테이너(ArtifactViewer 가 mermaid.run 으로 SVG 변환).
+      // 내용은 이미 escape 됨 → mermaid 는 node.textContent(디코드본)를 소스로 읽으므로 안전.
+      // data-src 에 원본을 보관해 렌더 실패 시 코드블록으로 폴백한다.
+      if (lang.toLowerCase() === "mermaid") {
+        out.push(`<div class="mermaid-block" data-src="${code.replace(/"/g, "&quot;")}">${code}</div>`);
+        continue;
+      }
       out.push(
-        `<pre class="md-pre"><code${lang ? ` data-lang="${lang}"` : ""}>${buf.join("\n")}</code></pre>`
+        `<pre class="md-pre"><code${lang ? ` data-lang="${lang}"` : ""}>${code}</code></pre>`
       );
       continue;
     }
