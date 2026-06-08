@@ -61,20 +61,41 @@ async def get_message(message_id: str, db: AsyncSession = Depends(get_db)):
     return ok({"message": message_to_dict(msg), "related_updates": related})
 
 
+def _parse_after_cursor(after: str | None) -> datetime | None:
+    """polling `after` 파라미터를 datetime 으로 해소.
+
+    이 엔드포인트가 내보내는 next_cursor 는 복합 포맷
+    ``"{recorded_at_iso}|message:{message_id}"`` 이다. FE 가 그 커서를 그대로 되돌려
+    보내므로(폴링 폴백), 복합 커서를 받아 시각부분만 파싱한다. message_updates 는
+    datetime 만 필요하므로 id 부분은 버린다. 순수 ISO 시각도 그대로 허용한다.
+    파싱 실패 시 422(invalid_pagination)로 명확히 거절한다(무한 400 루프 방지, QI-WG).
+    """
+    from .. import errors
+
+    if after is None or after == "":
+        return None
+    ts_part = after.partition("|message:")[0] if "|message:" in after else after
+    try:
+        return datetime.fromisoformat(ts_part)
+    except (ValueError, TypeError):
+        raise errors.WebguiError("invalid_pagination", 422, "invalid after cursor format")
+
+
 @router.get("/message-updates", dependencies=[Depends(require_auth)])
 async def message_updates(
     room_id: str = Query(...),
-    after: datetime | None = Query(default=None),
+    after: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     """WG-MSG-04 polling fallback. message + runtime_event 를 MessageUpdate 로 합성."""
     from .. import errors
 
+    after_dt = _parse_after_cursor(after)
     room = await repo.get_room(db, room_id)
     if room is None:
         raise errors.room_not_found()
-    msgs = await repo.updates_since(db, room.room_id, after, limit)
+    msgs = await repo.updates_since(db, room.room_id, after_dt, limit)
     updates = []
     for m in msgs:
         ut = "message_received" if m.direction == "inbound" else (

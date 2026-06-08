@@ -103,6 +103,35 @@ export default {
     send,
     renderMessageBody,
     loadOlderMessages,
+    // 전송 + 입력창 초기화/재포커스(연속 입력 끊김 방지).
+    // send() 가 store.draft 를 동기적으로 비우므로 nextTick 후 높이 리셋·포커스.
+    submit() {
+      if (store.sending || !store.draft.trim()) return;
+      send();
+      this.$nextTick(() => this.resetComposer());
+    },
+    resetComposer() {
+      const el = this.$refs.composer;
+      if (!el) return;
+      el.style.height = "auto"; // 전송 후 1행 높이로 복귀
+      el.focus(); // 커서 복귀 → 연속 입력
+    },
+    // 줄 수에 따라 높이 자동 확장(최소 1행 ~ 최대 ~6행, 넘으면 내부 스크롤)
+    autoGrow() {
+      const el = this.$refs.composer;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 148) + "px";
+    },
+    // Enter=전송, Shift+Enter=줄바꿈. IME 조합 중 Enter 는 한글 확정이므로 오전송 금지.
+    onComposerKeydown(e) {
+      if (e.isComposing || e.keyCode === 229) return; // IME 조합 중 → 무시
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault(); // 줄바꿈 삽입 막고 전송
+        this.submit();
+      }
+      // Shift+Enter 는 기본 동작(줄바꿈) 유지
+    },
     fmtTime(iso) {
       if (!iso) return "";
       const d = new Date(iso);
@@ -265,18 +294,20 @@ export default {
         <div v-if="store.sendError" class="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-red-500">
           <Icon name="alert" :size="14" />{{ store.sendError }}
         </div>
-        <div class="flex items-center gap-2.5">
-          <input
+        <div class="flex items-end gap-2.5">
+          <textarea
+            ref="composer"
             v-model="draftProxy"
-            @keyup.enter="send"
-            :disabled="store.sending"
-            class="h-12 flex-1 rounded-[13px] border border-line bg-[#F4F4F6] px-[18px] text-[14.5px] text-ink-900 outline-none placeholder:text-ink-400 focus:border-amber-tintbd focus:bg-white disabled:opacity-60"
-            placeholder="PM에게 메시지를 입력하세요…"
-          />
+            @input="autoGrow"
+            @keydown="onComposerKeydown"
+            rows="1"
+            class="nice-scroll min-h-[48px] max-h-[148px] flex-1 resize-none overflow-y-auto rounded-[13px] border border-line bg-[#F4F4F6] px-[18px] py-[13px] text-[14.5px] leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:border-amber-tintbd focus:bg-white"
+            placeholder="PM에게 메시지를 입력하세요…  (Enter 전송 · Shift+Enter 줄바꿈)"
+          ></textarea>
           <button
-            @click="send"
+            @click="submit"
             :disabled="store.sending || !draftProxy.trim()"
-            class="flex h-12 w-12 items-center justify-center rounded-[13px] bg-amber text-white shadow-[0_2px_8px_rgba(221,107,31,0.32)] hover:bg-amber-600 disabled:opacity-50"
+            class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-[13px] bg-amber text-white shadow-[0_2px_8px_rgba(221,107,31,0.32)] hover:bg-amber-600 disabled:opacity-50"
           >
             <Icon name="send" :size="20" />
           </button>

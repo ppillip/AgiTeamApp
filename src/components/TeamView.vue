@@ -1,7 +1,7 @@
 <script>
 import Icon from "./Icon.vue";
 import { store, send, loadRoomPreviews } from "../stores/monitor.js";
-import { roleLabel, roleOrder, connectionInfo, provenanceInfo } from "../api/adapters.js";
+import { roleLabel, connectionInfo, provenanceInfo } from "../api/adapters.js";
 import { renderMessageBody } from "../lib/sanitize.js";
 
 // 전체 팀원 보기 (UI-04, 뮤즈 시안 기준).
@@ -21,6 +21,14 @@ const SUBTITLE = {
   QA: "검증 · 결함 관리",
   DevOps: "cmux · 런처 · 배포",
 };
+// 전체 팀원 보기 그리드 표시 순서(이 화면 한정 — 사이드바 ROLE_ORDER 와 무관).
+//  - QA(아르고스) top-left 고정 규약 유지.
+//  - 유저 지시: 아틀라스(DevOps) ↔ 뮤즈(Designer) 자리 교체 → DevOps 를 Designer 앞으로.
+const GRID_ORDER = ["QA", "Architect", "DeveloperBE", "DeveloperFE", "DevOps", "Designer"];
+const gridRank = (role) => {
+  const i = GRID_ORDER.indexOf(role);
+  return i === -1 ? 99 : i;
+};
 // 방 상태 tone → 칩 색
 const STATUS_CLASS = {
   live: "border-grn-tintbd bg-grn-tint text-grn-700",
@@ -37,14 +45,10 @@ export default {
     pmRoom() {
       return store.rooms.find((r) => r.isPM) || null;
     },
-    // 우측 6역할방: QA(아르고스) top-left 고정 → 맨 앞, 나머지는 역할 표준순
+    // 우측 6역할방: GRID_ORDER 기준(QA top-left 고정 + 아틀라스↔뮤즈 교체)
     gridRooms() {
       const others = store.rooms.filter((r) => !r.isPM);
-      return others.slice().sort((a, b) => {
-        if (a.role === "QA") return -1;
-        if (b.role === "QA") return 1;
-        return roleOrder(a.role) - roleOrder(b.role);
-      });
+      return others.slice().sort((a, b) => gridRank(a.role) - gridRank(b.role));
     },
     pmMessages() {
       // 좌측 PM 패널은 선택된(=PM) 방의 실시간 스레드를 그대로 사용
@@ -66,6 +70,34 @@ export default {
   methods: {
     roleLabel,
     send,
+    // 전송 + 입력창 초기화/재포커스(단일방 ChatView 와 동일 UX).
+    submit() {
+      if (store.sending || !store.draft.trim()) return;
+      send();
+      this.$nextTick(() => this.resetComposer());
+    },
+    resetComposer() {
+      const el = this.$refs.composer;
+      if (!el) return;
+      el.style.height = "auto"; // 전송 후 1행 높이로 복귀
+      el.focus(); // 커서 복귀 → 연속 입력
+    },
+    // 줄 수에 따라 높이 자동 확장(최소 1행 ~ 최대 ~5행, 넘으면 내부 스크롤)
+    autoGrow() {
+      const el = this.$refs.composer;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    },
+    // Enter=전송, Shift+Enter=줄바꿈. IME 조합 중 Enter 는 한글 확정이므로 오전송 금지.
+    onComposerKeydown(e) {
+      if (e.isComposing || e.keyCode === 229) return; // IME 조합 중 → 무시
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault(); // 줄바꿈 삽입 막고 전송
+        this.submit();
+      }
+      // Shift+Enter 는 기본 동작(줄바꿈) 유지
+    },
     // 대화창 el 등록(함수 ref). 최초 등록 시 stick=true(로드 시 맨 아래로).
     setThreadEl(key, el) {
       if (el) {
@@ -193,11 +225,11 @@ export default {
           </div>
         </div>
         <!-- 입력창: 실제 PM 송신 -->
-        <div class="flex flex-shrink-0 items-center gap-2.5 border-t border-line-soft bg-white p-[13px]">
-          <input v-model="draftProxy" @keyup.enter="send" :disabled="store.sending"
-                 class="h-[42px] min-w-0 flex-1 rounded-xl border border-[#e7e7ea] bg-[#F7F7F8] px-3.5 text-[13.5px] font-semibold text-ink-900 outline-none placeholder:text-ink-400 focus:bg-white disabled:opacity-60"
-                 :placeholder="`${pmRoom.displayName}(PM)에게 메시지를 입력하세요`" />
-          <button @click="send" :disabled="store.sending || !draftProxy.trim()"
+        <div class="flex flex-shrink-0 items-end gap-2.5 border-t border-line-soft bg-white p-[13px]">
+          <textarea ref="composer" v-model="draftProxy" @input="autoGrow" @keydown="onComposerKeydown" rows="1"
+                 class="nice-scroll min-h-[42px] max-h-[120px] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-[#e7e7ea] bg-[#F7F7F8] px-3.5 py-[10px] text-[13.5px] font-semibold leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:bg-white"
+                 :placeholder="`${pmRoom.displayName}(PM)에게 메시지를 입력하세요  (Enter 전송 · Shift+Enter 줄바꿈)`"></textarea>
+          <button @click="submit" :disabled="store.sending || !draftProxy.trim()"
                   class="grid h-[42px] w-[42px] flex-shrink-0 place-items-center rounded-xl bg-amber text-white shadow-[0_2px_8px_rgba(221,107,31,0.32)] hover:bg-amber-600 disabled:opacity-50">
             <Icon name="send" :size="18" />
           </button>

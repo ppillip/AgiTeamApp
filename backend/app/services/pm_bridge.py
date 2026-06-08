@@ -197,6 +197,9 @@ class PMBridge:
         await db.commit()
 
         message = message_to_dict(msg)
+        # 프론트 dedup: WS broadcast message 에도 client_message_id 를 포함시켜
+        # 낙관적(optimistic) 말풍선과 서버 말풍선을 상관시켜 중복 표시를 방지한다.
+        message["client_message_id"] = client_message_id
         ack = {
             "accepted": True,
             "send_submitted": submitted,

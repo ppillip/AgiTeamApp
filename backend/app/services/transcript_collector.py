@@ -19,6 +19,7 @@ DB/파일 일시 장애에도 죽지 않고 다음 폴링에서 재시도한다.
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -404,22 +405,49 @@ class TranscriptCollector:
         return 1
 
 
+# 유저→PM 선저장(bridge) 출처. transcript 의 같은 메시지를 cross-source 로 매칭할 때
+# 이 출처들만 canonical 로 인정한다 (transcript↔transcript 오매칭 방지).
+_BRIDGE_SOURCES = ("webgui", "pm_bridge", "bridge")
+
+# cross-source dedup 용 정규화: 표시값(normalized_text, 멀티라인 보존)은 건드리지 않고
+# '매칭 키'로만 쓴다. cmux 래핑/개행/연속공백 차이를 흡수하기 위해 모든 공백 run 을
+# 단일 스페이스로 접고 trim 한다. (결함수정 2026-06-09: SENT/LIVE TRANSCRIPT 이중 표시)
+_WS_RE = re.compile(r"\s+")
+
+
+def canonical_match_text(s: str | None) -> str:
+    return _WS_RE.sub(" ", (s or "").strip())
+
+
 async def _find_outbound_text_dup(db, room_id, text: str):
-    """같은 방의 최근 outbound 중 동일 normalized_text 가 있으면 반환(bridge canonical 우선)."""
+    """같은 방의 최근 bridge outbound 중 canonical 텍스트가 일치하는 선저장본을 반환.
+
+    cmux 래핑/공백 차이로 정확 일치(``==``)가 깨지던 문제를 해결하기 위해, 후보를
+    최근순으로 받아 Python 에서 canonical 비교한다. 일치 시 bridge 가 canonical 이므로
+    transcript insert 를 skip 한다.
+    """
     from sqlalchemy import select
 
     from ..db.models import WebguiMessage
+
+    target = canonical_match_text(text)
+    if not target:
+        return None
 
     res = await db.execute(
         select(WebguiMessage)
         .where(
             WebguiMessage.room_id == room_id,
             WebguiMessage.direction == "outbound",
-            WebguiMessage.normalized_text == text,
+            WebguiMessage.source.in_(_BRIDGE_SOURCES),
         )
-        .limit(1)
+        .order_by(WebguiMessage.recorded_at.desc())
+        .limit(50)
     )
-    return res.scalars().first()
+    for cand in res.scalars().all():
+        if canonical_match_text(cand.normalized_text) == target:
+            return cand
+    return None
 
 
 # 앱 전역 singleton (hook 이 등록, collector 가 소비)

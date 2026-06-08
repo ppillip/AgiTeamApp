@@ -85,17 +85,21 @@ export function canCompose() {
 //   - 선택방 message-updates(말풍선) + rooms 주기 재조회(방 추가·연결상태).
 let ws = null;
 let pollTimer = null; // 선택방 메시지 polling
-let roomsPollTimer = null; // 방 목록/연결상태 polling
+let roomsPollTimer = null; // 방 목록/연결상태 + 팀뷰 미리보기 polling
 let pollCursor = null;
 let wsProjectId = null;
+let wsReconnectTimer = null; // WS 재연결 예약 타이머
+let wsReconnectAttempt = 0; // 재연결 시도 횟수(지수 backoff 인덱스)
+const WS_BACKOFF = [1000, 2000, 5000, 10000]; // 1s→2s→5s→10s(상한)
 
-function stopRealtime() {
-  if (ws) {
-    try {
-      ws.close(1000);
-    } catch {}
-    ws = null;
+function clearReconnect() {
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
   }
+}
+
+function stopPolling() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -105,6 +109,18 @@ function stopRealtime() {
     roomsPollTimer = null;
   }
   pollCursor = null;
+}
+
+function stopRealtime() {
+  clearReconnect();
+  wsReconnectAttempt = 0;
+  if (ws) {
+    try {
+      ws.close(1000);
+    } catch {}
+    ws = null;
+  }
+  stopPolling();
   wsProjectId = null;
 }
 
@@ -185,8 +201,9 @@ function mergeRooms(rooms) {
 }
 
 function startPolling(projectId) {
-  if (pollTimer) clearInterval(pollTimer);
+  if (pollTimer) return; // 이미 폴링 중(재연결 실패 반복 시 중복 타이머 방지)
   pollCursor = null;
+  // 선택방 본문 스레드(단일방 보기)
   pollTimer = setInterval(async () => {
     const rid = store.selectedRoomId;
     if (!rid) return;
@@ -198,11 +215,14 @@ function startPolling(projectId) {
       /* 다음 tick 재시도 */
     }
   }, 3000);
-  if (roomsPollTimer) clearInterval(roomsPollTimer);
+  // 방 목록/연결상태 + 전체 방 미리보기(팀뷰). WS 가 죽어도 팀뷰가 멈추지 않게 폴백 커버.
   roomsPollTimer = setInterval(async () => {
     if (store.selectedProjectId !== projectId) return;
     try {
       mergeRooms(await api.fetchRooms(projectId));
+    } catch {}
+    try {
+      await loadRoomPreviews(6, { silent: true }); // 전체 팀원 보기 미리보기 갱신(스피너 토글 없이)
     } catch {}
   }, 5000);
 }
@@ -211,25 +231,58 @@ function startRealtime(projectId) {
   stopRealtime();
   if (store.degraded || !projectId) return;
   wsProjectId = projectId;
-  // 프로젝트 단위 WebSocket 우선(room_id 없이 프로젝트 전역 이벤트 구독)
+  wsReconnectAttempt = 0;
+  connectWs(projectId);
+}
+
+// WS 끊김 시 지수 backoff 로 재연결 예약(폴링은 그동안 폴백으로 유지).
+// 프로젝트 전환·정상종료 시엔 예약하지 않는다.
+function scheduleReconnect(projectId) {
+  if (store.selectedProjectId !== projectId || store.degraded) return;
+  if (wsReconnectTimer) return; // 이미 예약됨
+  const delay = WS_BACKOFF[Math.min(wsReconnectAttempt, WS_BACKOFF.length - 1)];
+  wsReconnectAttempt++;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    if (store.selectedProjectId !== projectId || store.degraded) return;
+    connectWs(projectId); // WS 만 재시도(폴링 타이머는 유지)
+  }, delay);
+}
+
+// 프로젝트 단위 WebSocket 연결(room_id 없이 프로젝트 전역 이벤트 구독).
+// onopen: backoff 리셋 + 폴링 중지(WS 우선). onclose(비정상): 즉시 폴백 + 재연결 예약.
+function connectWs(projectId) {
   try {
     const url = api.messageStreamUrl(projectId);
     ws = new WebSocket(url);
+    ws.onopen = () => {
+      if (store.selectedProjectId !== projectId) {
+        try { ws && ws.close(1000); } catch {}
+        return;
+      }
+      wsReconnectAttempt = 0; // 연결 성공 → backoff 리셋
+      clearReconnect();
+      stopPolling(); // WS 우선 → 폴백 폴링 중지
+    };
     ws.onmessage = handleWsEvent;
     ws.onerror = () => {
       try {
         ws && ws.close();
       } catch {}
-      ws = null;
-      startPolling(projectId); // WS 불가 → polling 폴백
+      // 이어서 onclose 가 호출됨 → 거기서 폴백/재연결 일괄 처리
     };
     ws.onclose = (e) => {
-      if (store.selectedProjectId === projectId && !pollTimer && e.code !== 1000) {
-        startPolling(projectId);
-      }
+      ws = null;
+      if (store.selectedProjectId !== projectId) return; // 프로젝트 전환됨
+      if (e && e.code === 1000) return; // 정상 종료(stopRealtime 등)
+      startPolling(projectId); // 즉시 폴백(팀뷰·단일방 안 멈춤)
+      scheduleReconnect(projectId); // WS 재연결 시도
     };
   } catch {
-    startPolling(projectId);
+    if (store.selectedProjectId === projectId) {
+      startPolling(projectId);
+      scheduleReconnect(projectId);
+    }
   }
 }
 
@@ -276,18 +329,30 @@ function applyUpdates(updates) {
   for (const u of updates) {
     if (!u || !u.message) continue; // 이벤트성(correlation_closed 등)은 본문 없음 → skip
     const rawId = u.message.message_id;
+    // 낙관적 말풍선 상관 키(BE 가 broadcast 에 추가하는 client_message_id).
+    // 서버 id 로 매칭 실패 시, send() 가 만든 pending 항목(messageId=clientMessageId)을
+    // 이 키로 찾아 치환/머지하여 말풍선 중복(race) 을 제거한다.
+    const clientId = u.message.client_message_id;
     // 1) 선택된 방의 본문 스레드 갱신
     if (u.room_id === store.selectedRoomId) {
-      const idx = rawId != null ? store.messages.findIndex((x) => x.messageId === rawId) : -1;
+      let idx = rawId != null ? store.messages.findIndex((x) => x.messageId === rawId) : -1;
+      if (idx < 0 && clientId != null)
+        idx = store.messages.findIndex((x) => x.pending && x.messageId === clientId);
       const existing = idx >= 0 ? store.messages[idx] : null;
       const m = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, existing));
-      if (idx >= 0) store.messages[idx] = mergeMessage(store.messages[idx], m);
+      if (idx >= 0) store.messages[idx] = mergeMessage(store.messages[idx], m); // 낙관적→서버 치환(중복 방지)
       else store.messages.push(m); // 신규 말풍선 → 즉시 추가(실시간 렌더)
     }
     // 2) 미리보기 갱신(전체 팀원 보기 — 선택 여부 무관, 모든 방)
-    const pv = store.roomPreviews[u.room_id];
+    let pv = store.roomPreviews[u.room_id];
+    // 신규 방(아직 미리보기 엔트리 없음)도 팀뷰에 실시간 반영(C). 알려진 방만 생성.
+    if (!pv && store.rooms.some((r) => r.roomId === u.room_id)) {
+      pv = store.roomPreviews[u.room_id] = [];
+    }
     if (pv) {
-      const pi = rawId != null ? pv.findIndex((x) => x.messageId === rawId) : -1;
+      let pi = rawId != null ? pv.findIndex((x) => x.messageId === rawId) : -1;
+      if (pi < 0 && clientId != null)
+        pi = pv.findIndex((x) => x.pending && x.messageId === clientId);
       const pm = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, pi >= 0 ? pv[pi] : null));
       if (pi >= 0) pv[pi] = mergeMessage(pv[pi], pm);
       else {
@@ -299,10 +364,11 @@ function applyUpdates(updates) {
 }
 
 // 전체 팀원 보기: 각 방의 최근 N개 말풍선을 병렬로 채운다(실데이터). degraded 시 mock.
-export async function loadRoomPreviews(limit = 6) {
+export async function loadRoomPreviews(limit = 6, { silent = false } = {}) {
   const rooms = store.rooms.slice();
   if (!rooms.length) return;
-  store.previewsLoading = true;
+  // silent: 폴링 폴백의 주기 갱신 — 스피너 토글 없이 조용히 갱신(깜빡임 방지)
+  if (!silent) store.previewsLoading = true;
   try {
     if (store.degraded) {
       for (const r of rooms) {
@@ -316,12 +382,13 @@ export async function loadRoomPreviews(limit = 6) {
           const { messages } = await api.fetchMessages(r.roomId, { limit });
           store.roomPreviews[r.roomId] = messages;
         } catch {
-          store.roomPreviews[r.roomId] = [];
+          // silent 갱신 중 실패는 기존 미리보기 보존(빈 배열로 덮어 깜빡이지 않게)
+          if (!silent) store.roomPreviews[r.roomId] = [];
         }
       })
     );
   } finally {
-    store.previewsLoading = false;
+    if (!silent) store.previewsLoading = false;
   }
 }
 
@@ -545,7 +612,13 @@ export async function send() {
     const saved = data?.message ? adaptMessage(data.message) : null;
     const idx = store.messages.findIndex((x) => x.messageId === clientMessageId);
     if (saved && idx >= 0) store.messages[idx] = saved;
-    else if (saved) store.messages.push(saved);
+    else if (saved) {
+      // 낙관적 항목이 안 보이면, 이미 WS 이벤트가 같은 서버 메시지를 반영(치환)했을 수 있다.
+      // 같은 messageId 가 이미 있으면 push 금지 → 머지(중복 말풍선 방지, race).
+      const dup = store.messages.findIndex((x) => x.messageId === saved.messageId);
+      if (dup >= 0) store.messages[dup] = mergeMessage(store.messages[dup], saved);
+      else store.messages.push(saved);
+    }
   } catch (e) {
     const idx = store.messages.findIndex((x) => x.messageId === clientMessageId);
     if (idx >= 0) {
