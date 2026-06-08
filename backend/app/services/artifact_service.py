@@ -24,6 +24,9 @@ _RENDER_MODE = {
     "md": "markdown",
     "markdown": "markdown",
     "pdf": "pdf_stream",
+    "svg": "image",               # UI-07: SVG 이미지 표시 (FE ArtifactViewer 'image' 모드)
+    "html": "html",               # UI-06: HTML 표시 (FE ArtifactViewer 'html' 샌드박스 iframe)
+    "htm": "html",
     "pptx": "converted_preview",
     "docx": "converted_preview",
 }
@@ -31,6 +34,9 @@ _MIME = {
     "md": "text/markdown",
     "markdown": "text/markdown",
     "pdf": "application/pdf",
+    "svg": "image/svg+xml",
+    "html": "text/html",
+    "htm": "text/html",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
@@ -287,6 +293,15 @@ class ArtifactService:
                             return None
                 except OSError:
                     return None
+            # svg 는 XML/<svg> signature (선두 BOM/공백 허용)
+            if ext == "svg":
+                try:
+                    with open(abs_path, "rb") as f:
+                        head = f.read(1024).lstrip(b"\xef\xbb\xbf").lstrip()
+                    if not (head.startswith(b"<?xml") or head.startswith(b"<svg") or b"<svg" in head):
+                        return None
+                except OSError:
+                    return None
             return ext
         return None
 
@@ -352,6 +367,33 @@ class ArtifactService:
             from urllib.parse import quote
 
             base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
+            return {"file": base, "status": 200}
+
+        if render_mode == "image":
+            # UI-07: SVG 표시. <img src=stream_url> 로 안전 렌더(이미지로 로드 시 스크립트 비실행).
+            # inline content 도 함께 제공하되 script/on*/javascript: 를 무력화(defense-in-depth).
+            from urllib.parse import quote
+
+            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
+            if size <= max_inline_bytes:
+                text = rp.abs_path.read_text(encoding="utf-8", errors="replace")
+                if sanitize:
+                    text, warnings = sanitize_markdown(text)
+                    base["sanitized"] = True
+                    base["render_warnings"] = warnings
+                base["content"] = text
+                base["encoding"] = "utf-8"
+            base["content_type"] = "image/svg+xml"
+            return {"file": base, "status": 200}
+
+        if render_mode == "html":
+            # UI-06: HTML 표시. FE 가 sandbox iframe 으로 렌더한다(스크립트 격리).
+            # stream_url 로 원본을 제공(iframe src). raw HTML 본문은 inline 으로 내보내지 않는다
+            # (iframe srcdoc 직접 주입 시 XSS 위험 — FE 는 src 로 로드하고 sandbox 적용).
+            from urllib.parse import quote
+
+            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
+            base["content_type"] = "text/html; charset=utf-8"
             return {"file": base, "status": 200}
 
         # converted_preview (pptx/docx): 변환기는 DV/DevOps 단계 — 현재 미구현, pending 반환

@@ -113,6 +113,33 @@ class Settings(BaseSettings):
     def logs_dir(self, project_id: str) -> Path:
         return self.project_root(project_id) / self.agiteam_logs_subdir
 
+    # --- 실재 프로젝트 식별 (DV-49 / QI-WG-027) ------------------------------
+    # 프로젝트명 = 실재 폴더명. cmux workspace_title 은 식별/표시에 쓰지 않는다.
+
+    @staticmethod
+    def is_project_dir(root: Path) -> bool:
+        """폴더가 실재하는 AgiTeam 프로젝트인지: 디렉터리 존재 + 마커(.agiteam/
+        project_state.yaml/agiteam.json) 보유. 이름으로 판단하지 않고 실재만 본다."""
+        try:
+            if not root.is_dir():
+                return False
+        except OSError:
+            return False
+        return (
+            (root / ".agiteam").exists()
+            or (root / "project_state.yaml").exists()
+            or (root / "agiteam.json").exists()
+        )
+
+    def project_exists(self, project_id: str) -> bool:
+        """project_id 의 root 폴더가 실재 프로젝트인지 (유령/오타 경로 제외)."""
+        return self.is_project_dir(self.project_root(project_id))
+
+    def project_display_name(self, project_id: str) -> str:
+        """표시명 = 실재 root 폴더명(basename). cmux workspace_title 사용 금지."""
+        root = self.project_root(project_id)
+        return root.name or project_id
+
 
 @lru_cache
 def get_settings() -> Settings:

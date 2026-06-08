@@ -146,7 +146,7 @@ export default {
 </script>
 
 <template>
-  <section class="flex min-w-[400px] flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-white">
+  <section class="flex min-w-[320px] flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-white">
     <!-- 빈 상태 -->
     <div v-if="!room" class="flex flex-1 items-center justify-center text-[14px] text-ink-400">
       좌측에서 채팅방을 선택하세요.

@@ -25,14 +25,19 @@ async def list_projects(request: Request, db: AsyncSession = Depends(get_db)):
     raw = reg.projects()
     projects = []
     seen: set[str] = set()
+    # DV-49/QI-WG-027: 프로젝트 식별·표시 = 실재 root 폴더명. cmux workspace_title 금지.
+    # 폴더가 실재하지 않으면(유령) 드롭다운에서 제외한다(이름 판단 아님, 실재 여부만).
     for p in raw:
-        seen.add(p["project_id"])
+        pid = p["project_id"]
+        if not settings.project_exists(pid):
+            continue
+        seen.add(pid)
         projects.append(
             {
-                "project_id": p["project_id"],
+                "project_id": pid,
                 "workspace_id": p.get("workspace_id"),
-                "workspace_title": p.get("workspace_title", p["project_id"]),
-                "root_path": str(settings.project_root(p["project_id"])),
+                "workspace_title": settings.project_display_name(pid),  # 폴더명 (title 금지)
+                "root_path": str(settings.project_root(pid)),
                 "connection_state": p.get("connection_state", "disconnected"),
                 "pm_connection_state": p.get("pm_connection_state", "absent"),
                 "room_count": p.get("room_count", len(p.get("roles", []))),
@@ -42,21 +47,23 @@ async def list_projects(request: Request, db: AsyncSession = Depends(get_db)):
             }
         )
 
-    # DB 에 방을 보유했으나 디스커버리에 안 뜬 프로젝트를 보강 (QI-WG-021)
+    # DB 에 방을 보유했으나 디스커버리에 안 뜬 프로젝트를 보강 (QI-WG-021).
+    # 단, root 폴더가 실재하는 프로젝트만 (유령 project_id 의 잔존 방은 노출 안 함).
     try:
         db_projects = await repo.distinct_projects_with_rooms(db)
     except Exception:  # noqa: BLE001  (DB 미가동 시에도 디스커버리 결과는 반환)
         db_projects = []
     for dp in db_projects:
-        if dp["project_id"] in seen:
+        pid = dp["project_id"]
+        if pid in seen or not settings.project_exists(pid):
             continue
-        seen.add(dp["project_id"])
+        seen.add(pid)
         projects.append(
             {
-                "project_id": dp["project_id"],
+                "project_id": pid,
                 "workspace_id": None,
-                "workspace_title": dp["project_id"],
-                "root_path": str(settings.project_root(dp["project_id"])),
+                "workspace_title": settings.project_display_name(pid),  # 폴더명
+                "root_path": str(settings.project_root(pid)),
                 "connection_state": "disconnected",
                 "pm_connection_state": "absent",
                 "room_count": dp["room_count"],
@@ -66,9 +73,12 @@ async def list_projects(request: Request, db: AsyncSession = Depends(get_db)):
             }
         )
 
+    sel = reg.selected_project_id()
+    if sel is not None and not settings.project_exists(sel):
+        sel = None
     return ok(
         {
-            "selected_project_id": reg.selected_project_id(),
+            "selected_project_id": sel,
             "projects": projects,
         }
     )

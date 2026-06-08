@@ -51,6 +51,10 @@ export const store = reactive({
   messagesHasMore: false,
   loadingOlder: false,
 
+  // 전체 팀원 보기(UI-04): 방별 최근 말풍선 미리보기 캐시 { roomId: [message] }
+  roomPreviews: {},
+  previewsLoading: false,
+
   // 산출물 트리
   treeRoot: null,
   treeLoading: false,
@@ -265,18 +269,59 @@ function mergeMessage(prev, next) {
   return merged;
 }
 
-// update(MessageUpdate) 목록을 현재 메시지에 머지 (방어적: messageId 기준, 방=room 격리)
+// update(MessageUpdate) 목록을 머지. 선택된 방은 본문 스레드(store.messages)에,
+// 그리고 전체 팀원 보기를 위해 해당 방의 미리보기(roomPreviews)에도 실시간 반영한다.
 function applyUpdates(updates) {
   if (!Array.isArray(updates)) return;
   for (const u of updates) {
-    if (!u || u.room_id !== store.selectedRoomId) continue; // 선택된 방의 업데이트만 반영
-    if (!u.message) continue; // 이벤트성(correlation_closed/runtime_error 등)은 본문 없음 → skip
+    if (!u || !u.message) continue; // 이벤트성(correlation_closed 등)은 본문 없음 → skip
     const rawId = u.message.message_id;
-    const idx = rawId != null ? store.messages.findIndex((x) => x.messageId === rawId) : -1;
-    const existing = idx >= 0 ? store.messages[idx] : null;
-    const m = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, existing));
-    if (idx >= 0) store.messages[idx] = mergeMessage(store.messages[idx], m);
-    else store.messages.push(m); // 신규 말풍선 → 즉시 추가(실시간 렌더)
+    // 1) 선택된 방의 본문 스레드 갱신
+    if (u.room_id === store.selectedRoomId) {
+      const idx = rawId != null ? store.messages.findIndex((x) => x.messageId === rawId) : -1;
+      const existing = idx >= 0 ? store.messages[idx] : null;
+      const m = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, existing));
+      if (idx >= 0) store.messages[idx] = mergeMessage(store.messages[idx], m);
+      else store.messages.push(m); // 신규 말풍선 → 즉시 추가(실시간 렌더)
+    }
+    // 2) 미리보기 갱신(전체 팀원 보기 — 선택 여부 무관, 모든 방)
+    const pv = store.roomPreviews[u.room_id];
+    if (pv) {
+      const pi = rawId != null ? pv.findIndex((x) => x.messageId === rawId) : -1;
+      const pm = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, pi >= 0 ? pv[pi] : null));
+      if (pi >= 0) pv[pi] = mergeMessage(pv[pi], pm);
+      else {
+        pv.push(pm);
+        while (pv.length > 8) pv.shift(); // 최근 몇 개만 유지
+      }
+    }
+  }
+}
+
+// 전체 팀원 보기: 각 방의 최근 N개 말풍선을 병렬로 채운다(실데이터). degraded 시 mock.
+export async function loadRoomPreviews(limit = 6) {
+  const rooms = store.rooms.slice();
+  if (!rooms.length) return;
+  store.previewsLoading = true;
+  try {
+    if (store.degraded) {
+      for (const r of rooms) {
+        store.roomPreviews[r.roomId] = (MOCK_MESSAGES[r.roomId] || []).slice(-limit);
+      }
+      return;
+    }
+    await Promise.all(
+      rooms.map(async (r) => {
+        try {
+          const { messages } = await api.fetchMessages(r.roomId, { limit });
+          store.roomPreviews[r.roomId] = messages;
+        } catch {
+          store.roomPreviews[r.roomId] = [];
+        }
+      })
+    );
+  } finally {
+    store.previewsLoading = false;
   }
 }
 
@@ -348,6 +393,7 @@ export async function selectProject(projectId) {
   stopRealtime();
   store.selectedRoomId = null;
   store.messages = [];
+  store.roomPreviews = {}; // 전체 팀원 보기 미리보기 초기화
   // 산출물 트리 초기화 후 재로드
   store.treeRoot = null;
   store.expanded = {};

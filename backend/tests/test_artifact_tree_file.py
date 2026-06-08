@@ -89,6 +89,79 @@ def test_read_unsupported_format(svc):
     assert ei.value.code == "unsupported_media_type"
 
 
+def test_read_svg_inline_mode(svc, art_root):
+    # UI-07: SVG 뷰어 지원
+    (art_root / "diagram.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
+        encoding="utf-8",
+    )
+    r = svc.read_file("diagram.svg")
+    assert r["status"] == 200
+    f = r["file"]
+    assert f["render_mode"] == "image"
+    assert f["mime_type"] == "image/svg+xml"
+    assert f["content_type"] == "image/svg+xml"
+    assert f["stream_url"] is not None          # <img src> 안전 렌더 경로
+    assert "<svg" in (f["content"] or "")       # inline content 도 제공
+
+
+def test_read_svg_sanitizes_script(svc, art_root):
+    # SVG 내 script/on* 은 무력화(defense-in-depth)
+    (art_root / "evil.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">'
+        '<script>alert(2)</script><rect/></svg>',
+        encoding="utf-8",
+    )
+    r = svc.read_file("evil.svg", sanitize=True)
+    c = r["file"]["content"]
+    assert "<script" not in c.lower()
+    assert "onload=" not in c.lower()
+
+
+def test_svg_signature_rejects_non_svg(svc, art_root):
+    # 확장자만 .svg 이고 내용이 SVG/XML 이 아니면 거부
+    (art_root / "fake.svg").write_text("just plain text not svg", encoding="utf-8")
+    with pytest.raises(WebguiError) as ei:
+        svc.read_file("fake.svg")
+    assert ei.value.code == "unsupported_media_type"
+
+
+def test_svg_tree_node_renderable(svc, art_root):
+    (art_root / "pic.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    data = svc.list_tree("", depth=1)
+    node = next(c for c in data["node"]["children"] if c["name"] == "pic.svg")
+    assert node["renderable"] is True
+    assert node["mime_type"] == "image/svg+xml"
+
+
+def test_read_html_iframe_mode(svc, art_root):
+    # UI-06: HTML 뷰어 지원 (FE 샌드박스 iframe)
+    (art_root / "report.html").write_text(
+        "<html><body><h1>리포트</h1></body></html>", encoding="utf-8")
+    r = svc.read_file("report.html")
+    assert r["status"] == 200
+    f = r["file"]
+    assert f["render_mode"] == "html"
+    assert f["mime_type"] == "text/html"
+    assert f["stream_url"] is not None       # iframe src 경로
+    assert f["content"] is None              # raw HTML 본문은 inline 미제공(XSS 차단)
+
+
+def test_read_htm_iframe_mode(svc, art_root):
+    (art_root / "page.htm").write_text("<html></html>", encoding="utf-8")
+    r = svc.read_file("page.htm")
+    assert r["file"]["render_mode"] == "html"
+    assert r["file"]["mime_type"] == "text/html"
+
+
+def test_html_tree_node_renderable(svc, art_root):
+    (art_root / "doc.html").write_text("<html></html>", encoding="utf-8")
+    data = svc.list_tree("", depth=1)
+    node = next(c for c in data["node"]["children"] if c["name"] == "doc.html")
+    assert node["renderable"] is True
+    assert node["mime_type"] == "text/html"
+
+
 def test_read_directory_is_not_file(svc):
     with pytest.raises(WebguiError) as ei:
         svc.read_file("02.설계")

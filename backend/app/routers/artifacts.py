@@ -100,7 +100,12 @@ async def stream_file(
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Type": mime,
+        "X-Content-Type-Options": "nosniff",
     }
+    # UI-06/07: html/svg 는 직접 탐색 시에도 스크립트가 앱 오리진에서 실행되지 않도록
+    # CSP sandbox 강제(FE 는 sandbox iframe / <img> 로 렌더하므로 정상 표시에는 영향 없음).
+    if mime in ("text/html", "image/svg+xml"):
+        headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
     if range_header and range_header.startswith("bytes="):
         try:
             rng = range_header.split("=", 1)[1].split(",")[0]

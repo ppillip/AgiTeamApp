@@ -387,6 +387,15 @@ class CmuxAdapter:
                     launch_meta = _parse_launch_env_text(path.read_text(encoding="utf-8"))
                 except OSError:
                     launch_meta = {}
+                # DV-49/QI-WG-027: project_id = 실재 root 폴더명. launch.sh 경로
+                # (/<ROOT>/.agiteam/agents/<role>/launch.sh)의 <ROOT> basename 을 SSoT 로
+                # 사용해 env 의 오타/쓰레기(AGITEAM_PROJECT_ID="2"/"AGI개발팀")·cmux title 을 덮어쓴다.
+                parts = str(path).split("/.agiteam/", 1)
+                if len(parts) == 2 and parts[0]:
+                    root_name = Path(parts[0]).name
+                    if root_name:
+                        launch_meta = dict(launch_meta)
+                        launch_meta["project_id"] = root_name
                 if launch_meta:
                     return surface_id, launch_meta
             proc_meta = _parse_env_from_process_text(ps_text)
