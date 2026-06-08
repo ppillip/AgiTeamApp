@@ -8,11 +8,21 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..deps import get_db, require_collector_auth
-from ..schemas.collector import CollectEventRequest, CollectMessageRequest
+from ..schemas.collector import CollectEventRequest, CollectMessageRequest, HookCollectRequest
 from ..schemas.common import ok
 from ..services import collector_service
 
 router = APIRouter(prefix="/api/webgui/internal/rooms", tags=["collector"])
+
+# AGENT_ID 라우팅 hook 수집 (room_id 미지정 — 방은 백엔드가 upsert). 닭달걀 해소.
+hook_router = APIRouter(prefix="/api/webgui/internal/hook", tags=["collector"])
+
+
+@hook_router.post("/collect", dependencies=[Depends(require_collector_auth)])
+async def collect_hook(body: HookCollectRequest, response: Response, db: AsyncSession = Depends(get_db)):
+    result = await collector_service.collect_hook(db, body)
+    response.status_code = 201
+    return ok(result)
 
 
 @router.post("/{room_id}/messages/collect", dependencies=[Depends(require_collector_auth)])

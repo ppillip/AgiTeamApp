@@ -56,9 +56,11 @@ def _ext(name: str) -> str | None:
 
 
 class ArtifactService:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, display_root: str = "documents/products/AgiTeamApp/") -> None:
         # 루트 자체를 realpath 로 고정 (symlink 루트 대비)
         self.root = Path(root).resolve()
+        # 응답용 논리 루트 라벨 (project_id 별로 다름, QI-WG-024). host 절대경로 비노출.
+        self._display = display_root
 
     # --- 경로 정규화/검증 (보안 핵심) -------------------------------------
 
@@ -179,8 +181,8 @@ class ArtifactService:
         return {"root": str(self._display_root()), "path": rp.rel_path, "node": node}
 
     def _display_root(self) -> str:
-        # 응답에는 host 절대경로 대신 논리 루트 표기를 사용
-        return "documents/products/AgiTeamApp/"
+        # 응답에는 host 절대경로 대신 논리 루트 표기를 사용 (project_id 별 해소, QI-WG-024)
+        return self._display
 
     def _children(
         self,

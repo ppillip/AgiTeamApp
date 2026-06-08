@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS webgui_message (
     direction        text        NOT NULL,
     source           text        NOT NULL,
     message_type     text        NOT NULL DEFAULT 'user_message',
+    -- transcript canonical 추적 필드 (DV-25, DS-30 §4.3)
+    provider             text,
+    transcript_path      text,
+    transcript_offset    text,
+    transcript_record_id text,
     raw_text         text,
     normalized_text  text,
     raw_hash         text,
@@ -82,8 +87,10 @@ CREATE TABLE IF NOT EXISTS webgui_message (
     recorded_at      timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT ck_webgui_message_direction CHECK (direction IN ('outbound','inbound','system')),
-    CONSTRAINT ck_webgui_message_source    CHECK (source IN ('webgui','pm_bridge','role_log','hook','read_screen')),
-    CONSTRAINT ck_webgui_message_type      CHECK (message_type IN ('user_message','log_line','status','error','unmatched')),
+    -- DV-25 수집 방향 확정: canonical source = bridge/hook/transcript. webgui/pm_bridge 는 호환값.
+    -- role_log/read_screen 본문 source 폐기 → raw role log 는 runtime_event 로 분리(DS-30 §4.3).
+    CONSTRAINT ck_webgui_message_source    CHECK (source IN ('webgui','pm_bridge','bridge','hook','transcript')),
+    CONSTRAINT ck_webgui_message_type      CHECK (message_type IN ('user_message','assistant_message','status','error','unmatched')),
     CONSTRAINT ck_webgui_message_status    CHECK (status IN ('pending','sent','failed','blocked','received','streaming','unmatched','closed','superseded'))
 );
 CREATE INDEX IF NOT EXISTS idx_webgui_message_room_time    ON webgui_message (room_id, occurred_at, message_id);
@@ -96,9 +103,15 @@ CREATE INDEX IF NOT EXISTS idx_webgui_message_direction    ON webgui_message (di
 CREATE INDEX IF NOT EXISTS idx_webgui_message_source       ON webgui_message (source);
 CREATE INDEX IF NOT EXISTS idx_webgui_message_type         ON webgui_message (message_type);
 CREATE INDEX IF NOT EXISTS idx_webgui_message_recorded     ON webgui_message (recorded_at);
--- role_log 중복 방지: 같은 session+source+raw_hash 유일 (raw_hash 존재 시)
+-- 중복 방지: 같은 session+source+raw_hash 유일 (raw_hash 존재 시)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_webgui_message_dedupe
     ON webgui_message (agent_session_id, source, raw_hash) WHERE raw_hash IS NOT NULL;
+-- transcript record 중복 방지: 같은 (project_id, provider, transcript_record_id) 유일 (DS-30 §5, DV-25)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webgui_message_provider_record
+    ON webgui_message (provider, transcript_record_id)
+    WHERE transcript_record_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_webgui_message_provider   ON webgui_message (provider);
+CREATE INDEX IF NOT EXISTS idx_webgui_message_transcript ON webgui_message (transcript_path);
 
 -- 4) webgui_runtime_event ---------------------------------------------------
 CREATE TABLE IF NOT EXISTS webgui_runtime_event (
@@ -117,7 +130,8 @@ CREATE TABLE IF NOT EXISTS webgui_runtime_event (
     occurred_at         timestamptz NOT NULL DEFAULT now(),
     recorded_at         timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT ck_webgui_event_severity CHECK (severity IN ('debug','info','warning','error')),
-    CONSTRAINT ck_webgui_event_source   CHECK (source IN ('cmux_adapter','role_log_collector','hook','read_screen','backend','artifact_service','postgres_notify'))
+    -- DV-25: conversation_collector/transcript_parser 추가, raw_log_collector 로 확정 (DS-30 §4.4 v0.7)
+    CONSTRAINT ck_webgui_event_source   CHECK (source IN ('cmux_adapter','conversation_collector','transcript_parser','raw_log_collector','hook','read_screen','backend','artifact_service','postgres_notify'))
 );
 CREATE INDEX IF NOT EXISTS idx_webgui_runtime_event_room_time      ON webgui_runtime_event (room_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_webgui_runtime_event_correlation    ON webgui_runtime_event (correlation_id, occurred_at);

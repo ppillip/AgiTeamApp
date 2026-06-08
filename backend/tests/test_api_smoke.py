@@ -92,8 +92,36 @@ def test_openapi_has_projects(client):
     assert "/api/webgui/projects" in r.json()["paths"]
 
 
-def test_db_endpoint_graceful_when_no_db(client):
-    # PostgreSQL 미가동 환경에서 DB 의존 엔드포인트는 503 으로 안전 처리되어야 한다.
-    r = client.get("/api/webgui/rooms")
+def test_db_endpoint_graceful_when_no_db(art_root, monkeypatch):
+    # PostgreSQL 미가동 시 DB 의존 엔드포인트는 503 으로 안전 처리되어야 한다.
+    # dev DB 가동 여부와 무관하도록 도달 불가 DB 를 명시적으로 강제한다(결정론적 검증).
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("WEBGUI_ARTIFACTS_ROOT", str(art_root))
+    monkeypatch.delenv("WEBGUI_API_TOKEN", raising=False)
+    monkeypatch.delenv("WEBGUI_COLLECTOR_TOKEN", raising=False)
+    monkeypatch.setenv("WEBGUI_ENABLE_BACKGROUND", "false")
+    # 도달 불가 포트로 DB 강제 다운 (.env 의 실제 dev DB 를 덮어씀)
+    monkeypatch.setenv(
+        "WEBGUI_DATABASE_URL", "postgresql+psycopg://nouser:nopw@127.0.0.1:1/nodb"
+    )
+
+    import app.db.base as db_base
+    from app.config import get_settings
+
+    def _reset_engine():
+        db_base._engine = None
+        db_base._sessionmaker = None
+
+    get_settings.cache_clear()
+    _reset_engine()  # 캐시된 엔진(이전 DSN) 폐기 → 강제 다운 DSN 재생성
+
+    from app.main import create_app
+
+    with TestClient(create_app()) as c:
+        r = c.get("/api/webgui/rooms")
     assert r.status_code in (503, 500)
     assert r.json()["ok"] is False
+
+    get_settings.cache_clear()
+    _reset_engine()

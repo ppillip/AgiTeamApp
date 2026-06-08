@@ -31,6 +31,51 @@ function pickRole(o) {
   return o.role ?? o.role_id ?? null;
 }
 
+// ── provenance(출처) 표식 (DS-60 §6.1 신뢰/provenance 규칙) ──────────
+// source/kind → 한눈에 신뢰 가능한 UI 표식. 실데이터(live/sent) ↔ 수동(manual) ↔ 목업(mock) ↔ 진단(diag).
+//   hook=LIVE HOOK · transcript=LIVE TRANSCRIPT (실데이터)
+//   webgui/pm_bridge/bridge=SENT (UI 발신·PM Bridge 제출)
+//   manual/injected=MANUAL (운영자 수동, 실 hook 위장 금지)
+//   mock=MOCK (is_mock/is_real_data=false 고정)
+//   read_screen/raw_log_collector=DIAGNOSTIC (본문 canonical 승격 금지)
+const PROVENANCE = {
+  hook: { label: "LIVE HOOK", tone: "live" },
+  transcript: { label: "LIVE TRANSCRIPT", tone: "live" },
+  webgui: { label: "SENT", tone: "sent" },
+  pm_bridge: { label: "SENT", tone: "sent" },
+  bridge: { label: "SENT", tone: "sent" },
+  manual: { label: "MANUAL", tone: "manual" },
+  injected: { label: "MANUAL", tone: "manual" },
+  mock: { label: "MOCK", tone: "mock" },
+  read_screen: { label: "DIAGNOSTIC", tone: "diag" },
+  raw_log_collector: { label: "DIAGNOSTIC", tone: "diag" },
+  role_log: { label: "DIAGNOSTIC", tone: "diag" },
+  raw_log: { label: "DIAGNOSTIC", tone: "diag" },
+  log: { label: "DIAGNOSTIC", tone: "diag" },
+};
+// tone 별 실데이터 여부 (유저가 '진짜 hook 데이터'를 신뢰하도록 구분)
+const REAL_TONES = new Set(["live", "sent"]);
+
+// source(+is_mock/kind) → {label, tone, real}. 알 수 없는 source 는 표식 없음(null).
+export function provenanceInfo(source, { isMock = false, kind = null } = {}) {
+  if (isMock || kind === "mock" || source === "mock") {
+    return { label: "MOCK", tone: "mock", real: false };
+  }
+  const p = source ? PROVENANCE[source] : null;
+  if (!p) return { label: null, tone: "unknown", real: false };
+  return { ...p, real: REAL_TONES.has(p.tone) };
+}
+
+// 연결/런타임 상태 → 3종 표식 (DS-60 §4.4 라이브 디스커버리 상태도).
+//   mock/runtime_state=mock          → MOCK (목업 명시, 실데이터 위장 금지)
+//   connected 또는 runtime_state=live → LIVE
+//   그 외(disconnected/unknown)        → 끊김
+export function connectionInfo(connectionState, runtimeState, { mock = false } = {}) {
+  if (mock || runtimeState === "mock") return { label: "MOCK", tone: "mock" };
+  if (connectionState === "connected" || runtimeState === "live") return { label: "LIVE", tone: "live" };
+  return { label: "끊김", tone: "off" };
+}
+
 // 표시용 모노그램(아바타 1글자): display_name 첫 글자, 없으면 role 약어.
 function monogram(displayName, role) {
   const n = (displayName || "").trim();
@@ -71,6 +116,10 @@ export function adaptRoom(r) {
   const role = pickRole(r);
   const roomType = r.room_type || (role === "PM" ? "pm" : "role");
   const last = r.last_message || null;
+  const prov = r.provenance || {};
+  const provSource = prov.source || r.source || null;
+  const isMock = r.is_mock === true || prov.kind === "mock" || provSource === "mock";
+  const runtimeState = r.runtime_state || prov.runtime_state || "unknown";
   return {
     roomId: r.room_id,
     projectId: r.project_id,
@@ -79,8 +128,14 @@ export function adaptRoom(r) {
     displayName: r.display_name || role,
     mono: monogram(r.display_name, role),
     connectionState: r.connection_state || "unknown",
+    runtimeState, // live | disconnected | mock | unknown (DS-60 §4.4)
     readyState: r.ready_state || "unknown",
     collectorState: r.collector_state || "unknown",
+    // provenance (DS-60 §6.1) — 방 단위 출처/신뢰
+    provSource,
+    isMock,
+    isRealData: prov.is_real_data ?? null,
+    teamSessionId: r.team_session_id || null,
     unread: r.unread_count ?? 0,
     lastText: last?.text ?? "",
     lastAt: r.last_message_at || last?.occurred_at || null,
@@ -97,25 +152,62 @@ export function adaptRooms(data) {
 
 // ── 메시지 ──────────────────────────────────────────────────
 // out(우측, 내/PM 발신) = direction==='outbound'. inbound(좌측, 에이전트 응답).
+//
+// source 스키마는 BE 수집기 재작성(transcript/hook canonical) 진행 중이라
+// 신·구 값을 모두 방어적으로 흡수한다(임의 추정 없이 passthrough + 파생 플래그).
+//   canonical 본문: bridge/pm_bridge(발신), transcript(수신), hook
+//   진단 보조(비canonical): read_screen, role_log, raw_log_collector, log
+const CANONICAL_SOURCES = ["bridge", "pm_bridge", "transcript", "webgui", "hook"];
+const DIAGNOSTIC_SOURCES = ["read_screen", "role_log", "raw_log_collector", "log", "raw_log"];
+
 export function adaptMessage(m) {
   const role = pickRole(m);
-  const out = m.direction === "outbound";
+  // 질문(user)=우측, 답변(assistant)=좌측. 방향이 명시되면 그대로 따르고,
+  // 방향이 누락된 경우(WS 희소 페이로드 등) message_type 으로 보강한다.
+  //   user_message(질문) → outbound(우측), assistant_message(답변) → inbound(좌측)
+  const out =
+    m.direction === "outbound" ||
+    (m.direction == null && m.message_type === "user_message");
+  // provenance 객체(신 스키마)를 우선 흡수하되, 평면 source(구 스키마)도 방어적으로 수용.
+  const prov = m.provenance || {};
+  const source = prov.source || m.source;
+  const isMock = m.is_mock === true || prov.kind === "mock" || source === "mock";
+  const isRealData = m.is_real_data ?? prov.is_real_data ?? null;
+  // degraded: read-screen 스냅샷 보강 등 비canonical 경로로 채워진 본문(DS-60 §6.6).
+  const degraded =
+    m.status === "degraded" ||
+    m.degraded === true ||
+    source === "read_screen" ||
+    m.message_type === "degraded";
+  // 진단 보조 출처(어두운 아바타·보조 라벨 대상)
+  const diagnostic = DIAGNOSTIC_SOURCES.includes(source);
+  // 출처 표식(DS-60 §6.1): LIVE HOOK/TRANSCRIPT/SENT/MANUAL/MOCK/DIAGNOSTIC
+  const prv = provenanceInfo(source, { isMock, kind: prov.kind });
   return {
     messageId: m.message_id,
     roomId: m.room_id,
     correlationId: m.correlation_id || null,
     role,
     direction: m.direction, // outbound | inbound | system
-    source: m.source, // webgui | role_log | hook | ...
-    messageType: m.message_type, // user_message | log_line | status | error | unmatched
+    source, // bridge | transcript | hook | webgui | read_screen | role_log | ...
+    canonical: source == null ? true : CANONICAL_SOURCES.includes(source),
+    diagnostic,
+    // provenance 파생 (유저가 실/수동/목업을 한눈에)
+    provLabel: prv.label, // 'LIVE HOOK' | 'LIVE TRANSCRIPT' | 'SENT' | 'MANUAL' | 'MOCK' | 'DIAGNOSTIC' | null
+    provTone: prv.tone, // live | sent | manual | mock | diag | unknown
+    isRealData: isRealData ?? prv.real,
+    isMock,
+    teamSessionId: m.team_session_id || null,
+    messageType: m.message_type, // user_message | assistant_message | status | error | unmatched | log_line
     text: m.text ?? "",
-    status: m.status, // pending | sent | failed | received | streaming | unmatched | ...
+    status: m.status, // pending | sent | failed | received | streaming | unmatched | degraded | ...
     out,
     occurredAt: m.occurred_at,
     recordedAt: m.recorded_at,
     pending: m.status === "pending",
     failed: m.status === "failed",
     unmatched: m.status === "unmatched" || m.message_type === "unmatched",
+    degraded,
   };
 }
 

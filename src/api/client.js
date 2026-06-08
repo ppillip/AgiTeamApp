@@ -6,6 +6,9 @@
 
 const BASE = (import.meta.env?.VITE_API_BASE ?? "").replace(/\/$/, "");
 const TOKEN = import.meta.env?.VITE_API_TOKEN || null;
+// WS 전용 베이스(예: ws://localhost:8000). 설정 시 WebSocket 을 백엔드로 직접 연결한다
+// (dev 의 vite ws 프록시 우회 — DV-48). 미설정 시 동일 출처(프록시) — 프로덕션 동일출처 배포 호환.
+const WS_BASE = (import.meta.env?.VITE_WS_BASE || "").replace(/\/$/, "");
 
 export class ApiError extends Error {
   constructor(message, { code = "error", status = 0, details = null } = {}) {
@@ -73,13 +76,16 @@ export const http = {
   post: (path, json, params) => request("POST", path, { json, params }),
 };
 
-// WebSocket URL(WG-MSG-05). 동일 출처 기준 ws(s):// 로 변환. token 은 query 로 전달.
+// WebSocket URL(WG-MSG-05). 우선순위: VITE_WS_BASE(직접 연결) → VITE_API_BASE → 동일 출처(프록시).
+// token 은 query 로 전달. http→ws, https→wss 로 보정(ws/wss 베이스는 그대로 유지).
 export function wsUrl(path, params) {
   const base =
+    WS_BASE ||
     BASE ||
     (typeof window !== "undefined" ? window.location.origin : "http://localhost:1420");
   const u = new URL(base + path);
-  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  if (u.protocol === "https:") u.protocol = "wss:";
+  else if (u.protocol === "http:") u.protocol = "ws:";
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== "") u.searchParams.set(k, v);

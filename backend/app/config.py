@@ -57,7 +57,10 @@ class Settings(BaseSettings):
     project_roots_json: str | None = None      # 예: '{"Panthea":"/abs/Panthea"}'
     agiteam_logs_subdir: str = ".agiteam/logs"
     discovery_poll_seconds: float = 5.0
-    logtail_poll_seconds: float = 2.0
+    discovery_missed_threshold: int = 2       # cmux tree 누락 N회 초과 시 disconnected
+    # transcript 는 hook_stop 트리거가 주 경로(DV-25 정정). 이 폴링은 안전망 fallback 이므로 길게.
+    transcript_poll_seconds: float = 30.0     # transcript JSONL canonical tail fallback 주기
+    logtail_poll_seconds: float = 2.0         # raw role log 진단 tail 주기
     enable_background: bool = True             # 백그라운드 폴링 루프 on/off (테스트 시 off)
 
     # 파일/렌더 제한 (DS-20 §13.5 / DS-40 §17.6)
@@ -78,6 +81,21 @@ class Settings(BaseSettings):
     @property
     def artifacts_root_resolved(self) -> Path:
         return Path(self.artifacts_root).resolve()
+
+    def artifacts_root_for(self, project_id: str | None) -> Path:
+        """project_id 별 산출물 트리 root 해소 (QI-WG-024 정밀화).
+
+        규약(균일): 모든 프로젝트의 산출물 트리 루트 = `<project_root>/documents`.
+        트리 top 노드 이름은 "documents", 그 아래 00.standard·01.proposal·02.reverse·
+        03.management·04.development·05.operation 이 보인다. UI 드롭다운에서 선택된
+        project_id 를 따라 전환한다(AgiTeamApp 특례 없음). projects 와 동일한 project_root() 사용.
+        """
+        pid = project_id or self.project_id
+        return (self.project_root(pid) / "documents").resolve()
+
+    def artifacts_display_root_for(self, project_id: str | None) -> str:
+        """응답용 논리 루트 라벨 (host 절대경로 비노출). 트리 top 노드는 'documents'."""
+        return "documents/"
 
     def project_root(self, project_id: str) -> Path:
         """project_id → 파일시스템 루트. project_roots_json 우선, 없으면 base/<project_id>."""

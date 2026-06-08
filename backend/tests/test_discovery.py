@@ -63,6 +63,35 @@ def test_parse_tree_projects_and_roles():
     pm = [s for s in by_name["Panthea"].surfaces if s.role_id == "PM"][0]
     assert pm.surface_id == "surface:29"
     assert pm.display_name == "제우스"
+    assert pm.tty == "ttys000"
+
+
+def test_parse_tree_prefers_runtime_metadata_project_and_agent():
+    projects = parse_tree(
+        SAMPLE_TREE,
+        {
+            "surface:8": {
+                "project_id": "HookTest",
+                "team_session_id": "20260608_121158",
+                "agent_id": "PM",
+                "agent_type": "claude",
+            },
+            "surface:9": {
+                "project_id": "HookTest",
+                "team_session_id": "20260608_121158",
+                "agent_id": "DeveloperBE",
+                "agent_type": "claude",
+            },
+        },
+    )
+    by_name = {p.project_id: p for p in projects}
+    assert "HookTest" in by_name
+    assert "AGI개발팀" not in by_name
+    roles = {s.role_id: s for s in by_name["HookTest"].surfaces}
+    assert roles["DeveloperBE"].surface_id == "surface:9"
+    assert roles["DeveloperBE"].team_session_id == "20260608_121158"
+    assert roles["DeveloperBE"].agent_id == "DeveloperBE"
+    assert roles["DeveloperBE"].agent_type == "claude"
 
 
 def test_registry_resolve_and_projects():
@@ -101,3 +130,20 @@ def test_registry_liveness_disconnect():
     assert info.surface_id == "surface:30"  # 식별 정보는 보존
     # PM 은 여전히 connected
     assert reg.resolve("Panthea", "PM").connection_state == "connected"
+
+
+def test_registry_missed_threshold_delays_disconnect():
+    reg = DiscoveryRegistry()
+    reg.refresh_from_tree(SAMPLE_TREE, missed_threshold=2)
+    shrunk = SAMPLE_TREE.replace(
+        '│   │   └── surface surface:30 [terminal] "불칸(BE)" [selected] ◀ here tty=ttys001\n', ""
+    )
+    first_changes = reg.refresh_from_tree(shrunk, missed_threshold=2)
+    info = reg.resolve("Panthea", "DeveloperBE")
+    assert info is not None
+    assert info.connection_state == "connected"
+    assert first_changes == []
+    second_changes = reg.refresh_from_tree(shrunk, missed_threshold=2)
+    assert reg.resolve("Panthea", "DeveloperBE").connection_state == "disconnected"
+    assert second_changes[0]["to_state"] == "disconnected"
+    assert second_changes[0]["reason"] == "cmux_tree_missed"

@@ -23,7 +23,7 @@ export default {
 </script>
 
 <template>
-  <aside class="flex w-[400px] flex-shrink-0 flex-col overflow-hidden rounded-2xl border border-line bg-white">
+  <aside class="flex h-full w-full flex-col overflow-hidden rounded-2xl border border-line bg-white">
     <div class="flex items-center justify-between px-[18px] pb-3 pt-[18px]">
       <h2 class="text-[16px] font-bold">산출물</h2>
       <button @click="reload" class="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6] hover:text-ink-600" title="새로고침">

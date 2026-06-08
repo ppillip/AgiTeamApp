@@ -14,7 +14,35 @@ def _s(v: Any) -> Any:
     return str(v) if v is not None else None
 
 
-def message_to_dict(m: WebguiMessage) -> dict[str, Any]:
+# 실데이터로 인정하는 source (DS-40 provenance): hook/transcript/bridge 는 실제 에이전트 산출.
+_REAL_SOURCES = {"hook", "transcript", "bridge", "pm_bridge"}
+# 수동(UI 사용자 입력) source
+_MANUAL_SOURCES = {"webgui"}
+
+
+def provenance_dict(source: str | None, *, runtime_state: str = "live") -> dict[str, Any]:
+    """DS-40 Provenance: 메시지/방의 출처·실데이터 여부·런타임 상태.
+
+    source: hook/transcript/bridge=real, webgui=manual(수동), 그 외=mock.
+    runtime_state: live | disconnected | mock. 실데이터 아니면 mock 으로 강제.
+    """
+    if source in _REAL_SOURCES:
+        kind = "real"
+    elif source in _MANUAL_SOURCES:
+        kind = "manual"
+    else:
+        kind = "mock"
+    is_real = kind == "real"
+    rs = runtime_state if is_real else ("manual" if kind == "manual" else "mock")
+    return {
+        "source": source,
+        "kind": kind,                 # real | manual | mock
+        "is_real_data": is_real,
+        "runtime_state": rs,          # live | disconnected | mock | manual
+    }
+
+
+def message_to_dict(m: WebguiMessage, *, runtime_state: str = "live") -> dict[str, Any]:
     return {
         "message_id": str(m.message_id),
         "room_id": str(m.room_id),
@@ -22,11 +50,13 @@ def message_to_dict(m: WebguiMessage) -> dict[str, Any]:
         "role": m.role_id,
         "surface_id": m.surface_id,
         "agent_session_id": _s(m.agent_session_id),
+        "team_session_id": m.team_session_id,        # provenance: FE 세션 구분선용 (DV-41)
         "direction": m.direction,
         "source": m.source,
         "message_type": m.message_type,
         "text": m.normalized_text,
         "status": m.status,
+        "provenance": provenance_dict(m.source, runtime_state=runtime_state),
         "occurred_at": m.occurred_at,
         "recorded_at": m.recorded_at,
         "updated_at": m.updated_at,
@@ -43,7 +73,22 @@ def last_message_dict(m: WebguiMessage) -> dict[str, Any]:
     }
 
 
-def room_summary_dict(r: WebguiRoom, last: WebguiMessage | None, collector_state: str = "unknown") -> dict[str, Any]:
+def _room_runtime_state(r: WebguiRoom, connection_state: str | None) -> str:
+    """방 runtime_state: cmux 연결됐으면 live, 아니면 disconnected (DV-42)."""
+    if connection_state in ("connected", "live"):
+        return "live"
+    return "disconnected"
+
+
+def room_summary_dict(
+    r: WebguiRoom,
+    last: WebguiMessage | None,
+    collector_state: str = "unknown",
+    *,
+    connection_state: str | None = None,
+) -> dict[str, Any]:
+    runtime_state = _room_runtime_state(r, connection_state)
+    last_source = last.source if last is not None else None
     return {
         "room_id": str(r.room_id),
         "project_id": r.project_id,
@@ -53,8 +98,13 @@ def room_summary_dict(r: WebguiRoom, last: WebguiMessage | None, collector_state
         "room_type": r.room_type,
         "surface_id": r.current_surface_id,
         "agent_session_id": _s(r.current_agent_session_id),
+        # provenance: 방의 현재 세션 식별값(식별키 아님) + 출처/실데이터/런타임 (DV-41/42)
+        "team_session_id": r.team_session_id,
+        "agent_id": r.agent_id,
         "ready_state": r.ready_state,
         "collector_state": collector_state,
+        "runtime_state": runtime_state,
+        "provenance": provenance_dict(last_source, runtime_state=runtime_state),
         "last_message": last_message_dict(last) if last is not None else None,
         "last_message_at": r.last_message_at,
         "read_marker_at": r.read_marker_at,

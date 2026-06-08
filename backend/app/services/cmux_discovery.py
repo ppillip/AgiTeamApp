@@ -10,6 +10,7 @@ tree 출력 예:
 
 규칙:
 - workspace 이름 = project_id (예: "Panthea")
+- agiteam launch env/launch.sh 에서 AGITEAM_PROJECT_ID 가 확인되면 workspace title 보다 우선한다.
 - surface title "이름(역할토큰)" 에서 역할 추출 → 정규 role_id 로 매핑
 - 역할 토큰이 인식되지 않는 surface(경로 터미널 등)는 무시
 - 인식된 역할이 1개 이상인 workspace 만 '프로젝트' 로 취급
@@ -41,8 +42,8 @@ ROLE_TOKEN_MAP: dict[str, str] = {
     "ops": "DevOps",
 }
 
-_WS_RE = re.compile(r'workspace\s+(workspace:\S+)\s+"([^"]+)"')
-_SURFACE_RE = re.compile(r'surface\s+(surface:\S+)\s+\[[^\]]*\]\s+"([^"]+)"')
+_WS_RE = re.compile(r'workspace\s+(\S+)\s+"([^"]+)"')
+_SURFACE_RE = re.compile(r'surface\s+(\S+)\s+\[[^\]]*\]\s+"([^"]+)".*?(?:\stty=(\S+))?$')
 _TITLE_RE = re.compile(r"^(.*?)\s*\(([^)]+)\)\s*$")
 
 
@@ -72,6 +73,12 @@ class DiscoveredSurface:
     role_id: str
     surface_id: str
     display_name: str
+    workspace_id: str = ""
+    tty: str | None = None
+    workspace_project_id: str | None = None
+    team_session_id: str | None = None
+    agent_id: str | None = None
+    agent_type: str | None = None
 
 
 @dataclass
@@ -83,12 +90,13 @@ class DiscoveredProject:
     surfaces: list[DiscoveredSurface] = field(default_factory=list)
 
 
-def parse_tree(text: str) -> list[DiscoveredProject]:
+def parse_tree(text: str, metadata: dict[str, dict] | None = None) -> list[DiscoveredProject]:
     """cmux tree --all 출력 → 프로젝트 목록 (인식된 역할이 있는 workspace 만).
 
     workspace 라인에 '◀ active' 마커가 있으면 selected(=현재 활성 워크스페이스)로 본다.
     """
     projects: dict[str, DiscoveredProject] = {}
+    metadata = metadata or {}
     current_ws_id: str | None = None
     current_proj: str | None = None
     current_selected = False
@@ -102,21 +110,35 @@ def parse_tree(text: str) -> list[DiscoveredProject]:
         sf = _SURFACE_RE.search(line)
         if sf and current_proj is not None:
             surface_id = sf.group(1)
+            meta = metadata.get(surface_id, {})
             parsed = parse_title(sf.group(2))
             if parsed is None:
                 continue
             display_name, role = parsed
-            proj = projects.get(current_proj)
+            project_id = meta.get("project_id") or current_proj
+            role = meta.get("agent_id") or meta.get("role") or role
+            proj = projects.get(project_id)
             if proj is None:
                 proj = DiscoveredProject(
-                    project_id=current_proj,
+                    project_id=project_id,
                     workspace_id=current_ws_id or "",
                     workspace_title=current_proj,
                     selected=current_selected,
                 )
-                projects[current_proj] = proj
+                projects[project_id] = proj
             proj.surfaces.append(
-                DiscoveredSurface(current_proj, role, surface_id, display_name)
+                DiscoveredSurface(
+                    project_id,
+                    role,
+                    surface_id,
+                    display_name,
+                    workspace_id=current_ws_id or "",
+                    tty=sf.group(3),
+                    workspace_project_id=current_proj,
+                    team_session_id=meta.get("team_session_id"),
+                    agent_id=meta.get("agent_id"),
+                    agent_type=meta.get("agent_type"),
+                )
             )
     return list(projects.values())
 
@@ -130,6 +152,12 @@ class SurfaceInfo:
     connection_state: str  # connected | disconnected
     last_seen_at: datetime
     workspace_id: str = ""
+    workspace_title: str = ""
+    tty: str | None = None
+    team_session_id: str | None = None
+    agent_id: str | None = None
+    agent_type: str | None = None
+    missed_count: int = 0
 
 
 class DiscoveryRegistry:
@@ -146,10 +174,17 @@ class DiscoveryRegistry:
         self._selected_project: str | None = None
         self._last_refresh: datetime | None = None
 
-    def refresh_from_tree(self, tree_text: str) -> None:
-        projects = parse_tree(tree_text)
+    def refresh_from_tree(
+        self,
+        tree_text: str,
+        metadata: dict[str, dict] | None = None,
+        *,
+        missed_threshold: int = 1,
+    ) -> list[dict]:
+        projects = parse_tree(tree_text, metadata)
         present: set[tuple[str, str]] = set()
         now = _now()
+        changes: list[dict] = []
         with self._lock:
             self._selected_project = None
             for proj in projects:
@@ -163,6 +198,9 @@ class DiscoveryRegistry:
                 for s in proj.surfaces:
                     key = (s.project_id, s.role_id)
                     present.add(key)
+                    prev = self._map.get(key)
+                    if prev is not None and prev.connection_state != "connected":
+                        changes.append(_change(prev, "connected", "cmux_tree_seen", now))
                     self._map[key] = SurfaceInfo(
                         project_id=s.project_id,
                         role_id=s.role_id,
@@ -170,23 +208,37 @@ class DiscoveryRegistry:
                         display_name=s.display_name,
                         connection_state="connected",
                         last_seen_at=now,
-                        workspace_id=proj.workspace_id,
+                        workspace_id=s.workspace_id or proj.workspace_id,
+                        workspace_title=proj.workspace_title,
+                        tty=s.tty,
+                        team_session_id=s.team_session_id,
+                        agent_id=s.agent_id,
+                        agent_type=s.agent_type,
+                        missed_count=0,
                     )
-            # 직전에 있었으나 이번에 사라진 surface → disconnected (식별 정보는 보존)
+            # 직전에 있었으나 이번에 사라진 surface → missed threshold 이후 disconnected (식별 정보는 보존)
             for key, info in self._map.items():
                 if key not in present:
-                    info.connection_state = "disconnected"
+                    info.missed_count += 1
+                    if info.connection_state != "disconnected" and info.missed_count >= max(1, missed_threshold):
+                        changes.append(_change(info, "disconnected", "cmux_tree_missed", now))
+                        info.connection_state = "disconnected"
             self._last_refresh = now
+        return changes
 
     def resolve(self, project_id: str, role_id: str) -> SurfaceInfo | None:
         with self._lock:
             return self._map.get((project_id, role_id))
 
-    def mark_disconnected(self, project_id: str, role_id: str) -> None:
+    def mark_disconnected(self, project_id: str, role_id: str, reason: str = "read_screen_ping_failed") -> dict | None:
+        now = _now()
         with self._lock:
             info = self._map.get((project_id, role_id))
-            if info:
+            if info and info.connection_state != "disconnected":
+                change = _change(info, "disconnected", reason, now)
                 info.connection_state = "disconnected"
+                return change
+        return None
 
     def selected_project_id(self) -> str | None:
         with self._lock:
@@ -215,6 +267,9 @@ class DiscoveryRegistry:
                         "surface_id": info.surface_id,
                         "connection_state": info.connection_state,
                         "last_seen_at": info.last_seen_at,
+                        "team_session_id": info.team_session_id,
+                        "agent_id": info.agent_id,
+                        "agent_type": info.agent_type,
                     }
                 )
             for g in grouped.values():
@@ -233,12 +288,33 @@ class DiscoveryRegistry:
         with self._lock:
             return [info for (p, _), info in self._map.items() if p == project_id]
 
+    def connected_roles(self) -> list[SurfaceInfo]:
+        with self._lock:
+            return [info for info in self._map.values() if info.connection_state == "connected"]
+
+    def all_roles(self) -> list[SurfaceInfo]:
+        with self._lock:
+            return list(self._map.values())
+
 
 _ROLE_ORDER = ["PM", "Architect", "DeveloperBE", "DeveloperFE", "Designer", "QA", "DevOps"]
 
 
 def _role_order(role_id: str) -> int:
     return _ROLE_ORDER.index(role_id) if role_id in _ROLE_ORDER else 99
+
+
+def _change(info: SurfaceInfo, to_state: str, reason: str, at: datetime) -> dict:
+    return {
+        "project_id": info.project_id,
+        "role_id": info.role_id,
+        "surface_id": info.surface_id,
+        "display_name": info.display_name,
+        "from_state": info.connection_state,
+        "to_state": to_state,
+        "reason": reason,
+        "occurred_at": at,
+    }
 
 
 registry = DiscoveryRegistry()

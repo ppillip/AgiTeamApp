@@ -9,6 +9,7 @@ import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -31,7 +32,7 @@ async def send_message(body: SendMessageRequest, response: Response, db: AsyncSe
     result = await bridge.send(
         db, project_id=project_id, text=body.text, client_message_id=body.client_message_id
     )
-    response.status_code = 202
+    response.status_code = 201
     return ok(result)
 
 
@@ -132,7 +133,9 @@ async def message_stream(ws: WebSocket):
             if push_task in done and not push_task.cancelled():
                 try:
                     payload = push_task.result()
-                    await ws.send_json(payload)
+                    # payload 에 datetime 등 비-JSON 타입이 섞여 있어도 안전하게 직렬화
+                    # (이전엔 ws.send_json 의 json.dumps 가 datetime 에서 실패→조용히 유실, QI-WG-026)
+                    await ws.send_json(jsonable_encoder(payload))
                 except Exception:
                     pass
             if recv_task in done and not recv_task.cancelled():

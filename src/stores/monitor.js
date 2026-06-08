@@ -13,7 +13,7 @@
 import { reactive } from "vue";
 import * as api from "../api/index.js";
 import { ApiError } from "../api/client.js";
-import { adaptMessage } from "../api/adapters.js";
+import { adaptMessage, adaptRoom, roleOrder } from "../api/adapters.js";
 import {
   MOCK_PROJECTS,
   MOCK_ROOMS,
@@ -46,6 +46,10 @@ export const store = reactive({
   draft: "",
   sending: false,
   sendError: null,
+  // 페이지네이션(WG-CHAT-02): 최초 20개 + 위로 스크롤 더보기(before-cursor)
+  messagesCursor: null, // 더 과거를 가리키는 next_cursor
+  messagesHasMore: false,
+  loadingOlder: false,
 
   // 산출물 트리
   treeRoot: null,
@@ -70,15 +74,21 @@ export function canCompose() {
   return !!r && r.isPM; // PM 방에서만 입력 가능
 }
 
-// ── 실시간 채널 ──────────────────────────────────────────────
+// ── 실시간 채널 (WG-MSG-04/05, DS-60 §4.4) ────────────────────
+// 프로젝트 단위 WebSocket 1개를 구독한다. 창을 열어두면 백엔드가 발행하는
+//   project_discovered / room_upserted / room_connection_changed / message(_sent/_received/_failed)
+// 이벤트로 방·말풍선이 실시간으로 추가/갱신된다("파바바박"). WS 불가 시 polling 폴백:
+//   - 선택방 message-updates(말풍선) + rooms 주기 재조회(방 추가·연결상태).
 let ws = null;
-let pollTimer = null;
+let pollTimer = null; // 선택방 메시지 polling
+let roomsPollTimer = null; // 방 목록/연결상태 polling
 let pollCursor = null;
+let wsProjectId = null;
 
 function stopRealtime() {
   if (ws) {
     try {
-      ws.close();
+      ws.close(1000);
     } catch {}
     ws = null;
   }
@@ -86,82 +96,236 @@ function stopRealtime() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  if (roomsPollTimer) {
+    clearInterval(roomsPollTimer);
+    roomsPollTimer = null;
+  }
   pollCursor = null;
+  wsProjectId = null;
 }
 
-function startPolling(projectId, roomId) {
+// WS envelope → 이벤트 분기. 다양한 키(type/event_type/update_type)를 방어적으로 흡수.
+function handleWsEvent(ev) {
+  let env;
+  try {
+    env = JSON.parse(ev.data);
+  } catch {
+    return;
+  }
+  const data = env.data && typeof env.data === "object" ? env.data : env;
+  const type = env.type || env.event_type || env.update_type || data.update_type || data.type;
+  if (!type) return;
+  if (type === "project_discovered") return upsertProjectEvent(data.project || data);
+  if (type === "room_upserted") return upsertRoomEvent(data.room || data);
+  if (type === "room_connection_changed") return applyRoomConnection(data.room || data);
+  // message 계열: update envelope({update_type,room_id,message}) 형태로 정규화 후 머지
+  if (type.indexOf("message") === 0 || data.message) {
+    const update = data.update_type
+      ? data
+      : { update_type: type, room_id: data.room_id, message: data.message, occurred_at: data.occurred_at };
+    applyUpdates([update]);
+  }
+}
+
+// 새 프로젝트 발견 → projects 목록 upsert(현재 선택 유지)
+function upsertProjectEvent(raw) {
+  if (!raw || !raw.project_id) return;
+  const idx = store.projects.findIndex((p) => p.projectId === raw.project_id);
+  // 간단 흡수(projects는 ProjectSwitcher 표시용) — 최소 필드만 갱신/추가
+  const p = {
+    projectId: raw.project_id,
+    title: raw.workspace_title || raw.title || raw.project_id,
+    connected: raw.connected ?? raw.connection_state === "connected",
+    pmConnected: raw.pm_connection_state === "connected",
+    roomCount: raw.room_count ?? 0,
+  };
+  if (idx >= 0) store.projects[idx] = { ...store.projects[idx], ...p };
+  else store.projects.push(p);
+}
+
+// 방 upsert(room_id 우선, 없으면 project_id+role) — 현재 선택 프로젝트만 반영
+function upsertRoomEvent(raw) {
+  if (!raw) return;
+  const room = adaptRoom(raw);
+  if (room.projectId && room.projectId !== store.selectedProjectId) return;
+  const idx = store.rooms.findIndex(
+    (r) => r.roomId === room.roomId || (r.projectId === room.projectId && r.role === room.role)
+  );
+  if (idx >= 0) {
+    store.rooms[idx] = { ...store.rooms[idx], ...room };
+  } else {
+    store.rooms.push(room);
+    store.rooms.sort((a, b) => roleOrder(a.role) - roleOrder(b.role)); // 역할 순서 유지
+  }
+}
+
+// 연결상태 변경(삭제하지 않고 상태만 갱신, DS-60 §4.4)
+function applyRoomConnection(raw) {
+  if (!raw) return;
+  const r = store.rooms.find((x) => x.roomId === raw.room_id || (x.projectId === raw.project_id && x.role === raw.role));
+  if (!r) return;
+  if (raw.connection_state) r.connectionState = raw.connection_state;
+  if (raw.runtime_state) r.runtimeState = raw.runtime_state;
+}
+
+// rooms 재조회 결과를 기존 목록에 머지(연결상태/last 갱신 + 신규 방 추가) — polling 폴백용
+function mergeRooms(rooms) {
+  for (const room of rooms) {
+    const idx = store.rooms.findIndex(
+      (r) => r.roomId === room.roomId || (r.projectId === room.projectId && r.role === room.role)
+    );
+    if (idx >= 0) store.rooms[idx] = { ...store.rooms[idx], ...room };
+    else store.rooms.push(room);
+  }
+  store.rooms.sort((a, b) => roleOrder(a.role) - roleOrder(b.role));
+}
+
+function startPolling(projectId) {
   if (pollTimer) clearInterval(pollTimer);
+  pollCursor = null;
   pollTimer = setInterval(async () => {
-    if (store.selectedRoomId !== roomId) return;
+    const rid = store.selectedRoomId;
+    if (!rid) return;
     try {
-      const { updates, next_cursor } = await api.fetchUpdates(roomId, pollCursor);
+      const { updates, next_cursor } = await api.fetchUpdates(rid, pollCursor);
       if (next_cursor) pollCursor = next_cursor;
       applyUpdates(updates);
     } catch {
-      /* 폴링 실패는 조용히 무시(다음 tick 재시도) */
+      /* 다음 tick 재시도 */
     }
   }, 3000);
+  if (roomsPollTimer) clearInterval(roomsPollTimer);
+  roomsPollTimer = setInterval(async () => {
+    if (store.selectedProjectId !== projectId) return;
+    try {
+      mergeRooms(await api.fetchRooms(projectId));
+    } catch {}
+  }, 5000);
 }
 
-function startRealtime(projectId, roomId) {
+function startRealtime(projectId) {
   stopRealtime();
-  if (store.degraded) return;
-  // WebSocket 우선
+  if (store.degraded || !projectId) return;
+  wsProjectId = projectId;
+  // 프로젝트 단위 WebSocket 우선(room_id 없이 프로젝트 전역 이벤트 구독)
   try {
-    const url = api.messageStreamUrl(projectId, roomId);
+    const url = api.messageStreamUrl(projectId);
     ws = new WebSocket(url);
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === "message_update" && msg.data) applyUpdates([msg.data]);
-      } catch {}
-    };
+    ws.onmessage = handleWsEvent;
     ws.onerror = () => {
-      // WS 불가 → polling 폴백
       try {
         ws && ws.close();
       } catch {}
       ws = null;
-      startPolling(projectId, roomId);
+      startPolling(projectId); // WS 불가 → polling 폴백
     };
     ws.onclose = (e) => {
-      if (store.selectedRoomId === roomId && !pollTimer && e.code !== 1000) {
-        startPolling(projectId, roomId);
+      if (store.selectedProjectId === projectId && !pollTimer && e.code !== 1000) {
+        startPolling(projectId);
       }
     };
   } catch {
-    startPolling(projectId, roomId);
+    startPolling(projectId);
   }
 }
 
-// update(MessageUpdate) 목록을 현재 메시지에 머지 (방어적: messageId 기준)
+// update_type → 누락 메타 보강 매핑.
+// WS 브로드캐스트(transcript_collector)의 message 페이로드는 {message_id,text,status}
+// 로 희소하여 direction/message_type/role/occurred_at 가 빠진다. 이를 envelope 의
+// update_type·occurred_at 과 기존 메시지로 보강해야 질문(user)·답변(assistant)이
+// 좌/우로 올바르게 렌더된다. (폴링 경로는 message_to_dict 로 전체 필드 → 보강은 무영향)
+//   message_sent   → outbound / user_message      (질문, 우측)
+//   message_received → inbound / assistant_message (답변, 좌측)
+//   message_failed → outbound + status=failed
+function enrichUpdateMessage(raw, updateType, occurredAt, existing) {
+  const m = { ...raw };
+  if (m.direction == null) {
+    if (updateType === "message_received") m.direction = "inbound";
+    else if (updateType === "message_sent" || updateType === "message_failed") m.direction = "outbound";
+    else if (existing) m.direction = existing.direction;
+  }
+  if (m.message_type == null) {
+    if (updateType === "message_received") m.message_type = "assistant_message";
+    else if (updateType === "message_sent") m.message_type = "user_message";
+    else if (existing) m.message_type = existing.messageType;
+  }
+  if (m.role == null && existing) m.role = existing.role;
+  if (m.status == null && updateType === "message_failed") m.status = "failed";
+  if (m.occurred_at == null && occurredAt) m.occurred_at = occurredAt;
+  return m;
+}
+
+// 정의된(non-null) 값만 덮어써, 희소 갱신이 기존 메타(방향·역할·시각)를 지우지 않게 병합.
+function mergeMessage(prev, next) {
+  const merged = { ...prev };
+  for (const k in next) {
+    const v = next[k];
+    if (v !== undefined && v !== null) merged[k] = v;
+  }
+  return merged;
+}
+
+// update(MessageUpdate) 목록을 현재 메시지에 머지 (방어적: messageId 기준, 방=room 격리)
 function applyUpdates(updates) {
   if (!Array.isArray(updates)) return;
   for (const u of updates) {
-    if (!u || u.room_id !== store.selectedRoomId) continue;
-    if (u.message) {
-      const m = adaptMessage(u.message);
-      const idx = store.messages.findIndex((x) => x.messageId === m.messageId);
-      if (idx >= 0) store.messages[idx] = { ...store.messages[idx], ...m };
-      else store.messages.push(m);
-    }
+    if (!u || u.room_id !== store.selectedRoomId) continue; // 선택된 방의 업데이트만 반영
+    if (!u.message) continue; // 이벤트성(correlation_closed/runtime_error 등)은 본문 없음 → skip
+    const rawId = u.message.message_id;
+    const idx = rawId != null ? store.messages.findIndex((x) => x.messageId === rawId) : -1;
+    const existing = idx >= 0 ? store.messages[idx] : null;
+    const m = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, existing));
+    if (idx >= 0) store.messages[idx] = mergeMessage(store.messages[idx], m);
+    else store.messages.push(m); // 신규 말풍선 → 즉시 추가(실시간 렌더)
   }
 }
 
 // ── 액션 ────────────────────────────────────────────────────
+
+// 연결 실패(백엔드 미기동/DB 미가동)인지 판정.
+// 응답을 받았다면(빈 목록이어도) 백엔드는 '연결됨' → mock 금지. 진짜 도달 불가만 degraded.
+//   network_error(status 0): fetch 자체 실패(백엔드 미기동)
+//   503: DB 미가동 등 일시 불가(client.js §"DB 미가동 등 503 → degraded")
+// 그 외(빈 응답·4xx·500 등)는 '연결됨'으로 보고 실데이터/빈 상태/에러로 처리한다.
+function isOfflineError(e) {
+  if (!(e instanceof ApiError)) return false;
+  return e.code === "network_error" || e.status === 0 || e.status === 503;
+}
 
 export async function boot() {
   store.projectsLoading = true;
   store.bootError = null;
   try {
     const { projects, selectedProjectId } = await api.fetchProjects();
-    if (!projects.length) throw new ApiError("프로젝트 없음", { code: "empty" });
+    // 성공 응답 = 백엔드 연결됨 → 실데이터 우선. 빈 목록이어도 mock 으로 덮지 않는다.
     store.degraded = false;
+    store.bootError = null;
     store.projects = projects;
-    await selectProject(selectedProjectId || projects[0].projectId);
+    if (projects.length) {
+      await selectProject(selectedProjectId || projects[0].projectId);
+    } else {
+      // 진짜 빈 상태: 발견된 프로젝트 없음 → 빈 상태 UI(가짜 mock 노출 금지)
+      store.selectedProjectId = null;
+      store.rooms = [];
+      store.selectedRoomId = null;
+      store.messages = [];
+      store.treeRoot = null;
+    }
   } catch (e) {
-    // 백엔드 미연결/빈 결과 → degraded 모드(mock)
-    enterDegraded(e);
+    if (isOfflineError(e)) {
+      // 백엔드 도달 불가 → degraded 모드(mock 으로 화면 유지)
+      enterDegraded(e);
+    } else {
+      // 연결은 됐으나 응답 오류 → 에러 노출, mock 금지(빈 상태)
+      store.degraded = false;
+      store.bootError = e instanceof ApiError ? e.message : String(e?.message || e);
+      store.projects = [];
+      store.selectedProjectId = null;
+      store.rooms = [];
+      store.selectedRoomId = null;
+      store.messages = [];
+      store.treeRoot = null;
+    }
   } finally {
     store.projectsLoading = false;
   }
@@ -209,6 +373,8 @@ export async function selectProject(projectId) {
   } finally {
     store.roomsLoading = false;
   }
+  // 프로젝트 단위 실시간 구독 시작(방·말풍선 실시간 추가)
+  startRealtime(projectId);
   loadTreeRoot();
 }
 
@@ -216,7 +382,11 @@ export async function selectRoom(roomId) {
   if (!roomId) return;
   store.selectedRoomId = roomId;
   store.sendError = null;
-  stopRealtime();
+  // 페이지네이션 상태 초기화 + (polling 모드면) 새 방 커서 리셋. WS(프로젝트)는 유지.
+  store.messagesCursor = null;
+  store.messagesHasMore = false;
+  store.loadingOlder = false;
+  pollCursor = null;
 
   if (store.degraded) {
     store.messages = MOCK_MESSAGES[roomId] || [];
@@ -227,22 +397,46 @@ export async function selectRoom(roomId) {
   store.messagesLoading = true;
   store.messages = [];
   try {
-    const { messages } = await api.fetchMessages(roomId, { limit: 50 });
+    // 최초 20개(WG-CHAT-02). 더 과거는 위로 스크롤 시 loadOlderMessages 로 +20씩.
+    const { messages, page } = await api.fetchMessages(roomId, { limit: 20 });
     store.messages = messages;
+    store.messagesCursor = page?.next_cursor || null;
+    store.messagesHasMore = !!page?.has_more;
     // 읽음 처리(WG-CHAT-03)
     const last = messages[messages.length - 1];
     api
       .markRead(roomId, { lastReadMessageId: last?.messageId })
       .then(() => markRoomReadLocal(roomId))
       .catch(() => {});
-    // 실시간 시작
-    pollCursor = null;
-    startRealtime(store.selectedProjectId, roomId);
   } catch (e) {
     store.messages = [];
     store.sendError = e instanceof ApiError ? e.message : "메시지 로드 실패";
   } finally {
     store.messagesLoading = false;
+  }
+}
+
+// 위로 스크롤 더보기: 현재 방의 더 과거 20개를 앞에 prepend(before-cursor).
+export async function loadOlderMessages() {
+  if (store.degraded) return; // mock 은 페이지네이션 없음
+  if (!store.messagesHasMore || store.loadingOlder || !store.selectedRoomId) return;
+  store.loadingOlder = true;
+  const roomId = store.selectedRoomId;
+  try {
+    const { messages, page } = await api.fetchMessages(roomId, {
+      limit: 20,
+      cursor: store.messagesCursor,
+    });
+    if (store.selectedRoomId !== roomId) return; // 그 사이 방 전환되면 폐기
+    const seen = new Set(store.messages.map((m) => m.messageId));
+    const older = messages.filter((m) => !seen.has(m.messageId));
+    store.messages = [...older, ...store.messages];
+    store.messagesCursor = page?.next_cursor || null;
+    store.messagesHasMore = !!page?.has_more;
+  } catch {
+    /* 실패 시 다음 시도 가능하도록 상태 유지 */
+  } finally {
+    store.loadingOlder = false;
   }
 }
 
@@ -270,6 +464,12 @@ export async function send() {
     out: true,
     pending: true,
     occurredAt: new Date().toISOString(),
+    // provenance(DS-60 §6.1): UI 발신 → SENT
+    provLabel: "SENT",
+    provTone: "sent",
+    isRealData: true,
+    isMock: false,
+    teamSessionId: null,
   };
   store.messages.push(optimistic);
   store.draft = "";
@@ -321,7 +521,7 @@ export async function loadTreeRoot() {
   }
   store.treeLoading = true;
   try {
-    const { node } = await api.fetchTree("", { depth: 1 });
+    const { node } = await api.fetchTree("", { depth: 1, projectId: store.selectedProjectId });
     store.treeRoot = node;
   } catch (e) {
     store.treeRoot = null;
@@ -345,7 +545,7 @@ export async function toggleFolder(node) {
   }
   store.childrenLoading[path] = true;
   try {
-    const { node: loaded } = await api.fetchTree(path, { depth: 1 });
+    const { node: loaded } = await api.fetchTree(path, { depth: 1, projectId: store.selectedProjectId });
     store.childrenCache[path] = loaded.children || [];
   } catch (e) {
     store.childrenCache[path] = [];
@@ -381,7 +581,7 @@ export async function openFile(node) {
   }
 
   try {
-    const file = await api.fetchFile(node.path, { prefer: "inline" });
+    const file = await api.fetchFile(node.path, { prefer: "inline", projectId: store.selectedProjectId });
     store.viewer.file = file;
   } catch (e) {
     store.viewer.error = e instanceof ApiError ? e.message : "파일 열기 실패";

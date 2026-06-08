@@ -59,7 +59,7 @@ async def list_rooms(
 @router.get("/{room_id}/messages", dependencies=[Depends(require_auth)])
 async def list_messages(
     room_id: str,
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=20, ge=1, le=200),
     cursor: str | None = Query(default=None),
     direction: str = Query(default="desc"),
     since: datetime | None = Query(default=None),
@@ -68,30 +68,56 @@ async def list_messages(
     correlation_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ):
+    """WG-CHAT-02 방 메시지 페이지 조회 (DV-41 페이지네이션).
+
+    방 클릭: limit=20 기본, 최신(desc) 20개. 위로 스크롤: cursor(=현재 표시된 가장
+    오래된 메시지의 next_cursor)를 넘기면 그보다 과거 20개를 추가 로드. has_more/next_cursor 반환.
+    """
     if direction not in ("asc", "desc"):
         raise errors.WebguiError("invalid_pagination", 422, "direction must be asc|desc")
     room = await repo.get_room(db, room_id)
     if room is None:
         raise errors.room_not_found()
     corr = repo.to_uuid(correlation_id) if correlation_id else None
+    before = after = None
+    if cursor:
+        cur = _parse_cursor(cursor)
+        if direction == "desc":
+            before = cur
+        else:
+            after = cur
     rows = await repo.list_messages(
-        db, room.room_id, limit=limit, direction=direction, since=since, until=until, correlation_id=corr
+        db, room.room_id, limit=limit, direction=direction, since=since, until=until,
+        correlation_id=corr, before=before, after=after,
     )
     has_more = len(rows) > limit
     rows = rows[:limit]
     last = await _last_message(db, room)
     session = await repo.active_session_for_room(db, room.room_id)
     cs = session.collector_state if session else "unknown"
+    conn = registry.resolve(room.project_id, room.role_id)
+    conn_state = conn.connection_state if conn else "disconnected"
     next_cursor = (
         f"{rows[-1].occurred_at.isoformat()}|message:{rows[-1].message_id}" if rows and has_more else None
     )
     return ok(
         {
-            "room": room_summary_dict(room, last, cs),
-            "messages": [message_to_dict(m) for m in rows],
+            "room": room_summary_dict(room, last, cs, connection_state=conn_state),
+            "messages": [message_to_dict(m, runtime_state=("live" if conn_state == "connected" else "disconnected")) for m in rows],
             "page": {"limit": limit, "next_cursor": next_cursor, "has_more": has_more},
         }
     )
+
+
+def _parse_cursor(cursor: str) -> tuple[datetime, "uuid.UUID"]:
+    """cursor = "{occurred_at_iso}|message:{message_id}" → (datetime, uuid)."""
+    import uuid as _uuid
+
+    try:
+        ts_part, _, id_part = cursor.partition("|message:")
+        return datetime.fromisoformat(ts_part), _uuid.UUID(id_part)
+    except (ValueError, TypeError):
+        raise errors.WebguiError("invalid_pagination", 422, "invalid cursor format")
 
 
 @router.post("/{room_id}/read", dependencies=[Depends(require_auth)])

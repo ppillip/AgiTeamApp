@@ -93,6 +93,41 @@ PYTHONPATH=. uvicorn app.main:app --host 127.0.0.1 --port 8731
 # 문서: http://127.0.0.1:8731/docs
 ```
 
+## 로컬 8000 백엔드 구동 절차
+
+hook/PM 브릿지 검증용 로컬 백엔드는 `127.0.0.1:8000`에서 최신
+`system/AgiTeamApp/backend` 소스로 실행한다.
+
+PM 브릿지의 `cmux read-screen/send/send-key`는 cmux `cmuxOnly` 접근 제약 때문에
+LaunchAgent 같은 cmux 외부 프로세스에서 동작하지 않는다. 따라서 표준 로컬 구동은
+전용 cmux workspace(`AgiTeamApp-Backend`) 안에서 uvicorn을 상주 실행하는 방식이다.
+이 workspace는 운영팀 workspace와 별개로 유지한다.
+
+```bash
+cd /Users/ppillip/Projects/Panthea
+
+# LaunchAgent는 사용하지 않는다.
+launchctl bootout gui/$(id -u)/com.panthea.agiteamapp.backend 2>/dev/null || true
+
+# 기존 8000 리스너가 있으면 확인 후 종료한다.
+lsof -nP -iTCP:8000 -sTCP:LISTEN
+kill <PID>
+
+# cmux 전용 backend workspace에서 상주 기동한다.
+cmux workspace create \
+  --name AgiTeamApp-Backend \
+  --cwd /Users/ppillip/Projects/Panthea/system/AgiTeamApp/backend \
+  --command 'cd /Users/ppillip/Projects/Panthea/system/AgiTeamApp/backend && PYTHONPATH=. ./.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level info' \
+  --focus false
+
+# 검증
+curl -sS http://127.0.0.1:8000/healthz
+curl -sS http://127.0.0.1:8000/openapi.json \
+  | python3 -c 'import json,sys; print("/api/webgui/internal/hook/collect" in json.load(sys.stdin)["paths"])'
+```
+
+로그는 `AgiTeamApp-Backend` workspace의 uvicorn surface에서 확인한다.
+
 ## 테스트
 
 ```bash

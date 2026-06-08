@@ -17,13 +17,24 @@ from ..services.artifact_service import ArtifactService
 router = APIRouter(prefix="/api/webgui/artifacts", tags=["artifacts"])
 
 
-def _svc(request: Request) -> ArtifactService:
-    return request.app.state.artifact_service
+def _svc(request: Request, project_id: str | None = None) -> ArtifactService:
+    """project_id 별 산출물 root 로 ArtifactService 해소 (QI-WG-024).
+
+    projects 엔드포인트와 동일한 project_root(project_id) 규약을 사용한다.
+    project_id 미지정 시 settings.project_id 로 fallback. allowlist/traversal 보안은
+    해소된 per-project root 기준으로 그대로 적용된다(다른 프로젝트·상위 escape 차단).
+    """
+    settings = get_settings()
+    pid = project_id or settings.project_id
+    root = settings.artifacts_root_for(pid)
+    display = settings.artifacts_display_root_for(pid)
+    return ArtifactService(root, display_root=display)
 
 
 @router.get("/tree", dependencies=[Depends(require_auth)])
 async def get_tree(
     request: Request,
+    project_id: str | None = Query(default=None),
     path: str | None = Query(default=None),
     depth: int = Query(default=1, ge=1),
     recursive: bool = Query(default=False),
@@ -33,7 +44,7 @@ async def get_tree(
 ):
     settings = get_settings()
     ext_list = [e.strip().lower() for e in extensions.split(",") if e.strip()] if extensions else None
-    data = _svc(request).list_tree(
+    data = _svc(request, project_id).list_tree(
         path,
         depth=depth,
         recursive=recursive,
@@ -51,11 +62,12 @@ async def get_file(
     request: Request,
     response: Response,
     path: str = Query(...),
+    project_id: str | None = Query(default=None),
     prefer: str = Query(default="inline"),
     sanitize: bool = Query(default=True),
 ):
     settings = get_settings()
-    result = _svc(request).read_file(
+    result = _svc(request, project_id).read_file(
         path,
         prefer=prefer,
         sanitize=sanitize,
@@ -72,6 +84,7 @@ async def get_file(
 async def stream_file(
     request: Request,
     path: str = Query(...),
+    project_id: str | None = Query(default=None),
     variant: str = Query(default="original"),
 ):
     settings = get_settings()
@@ -79,7 +92,7 @@ async def stream_file(
         # pptx/docx 변환 preview 는 변환기 미구현 단계 -> render_pending (DS-40 §18.3)
         raise errors.WebguiError("render_pending", 202, "Conversion preview is not ready.")
 
-    abs_path, mime, size = _svc(request).open_stream(path, max_stream_bytes=settings.max_stream_bytes)
+    abs_path, mime, size = _svc(request, project_id).open_stream(path, max_stream_bytes=settings.max_stream_bytes)
 
     range_header = request.headers.get("range")
     start, end = 0, size - 1

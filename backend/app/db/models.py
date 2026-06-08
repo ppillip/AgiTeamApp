@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String, Text, func
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,6 +31,10 @@ class WebguiRoom(Base):
     room_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     project_id: Mapped[str] = mapped_column(Text, nullable=False)
     role_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # 방 canonical 안정키 (DS-40/60 QI-WG-022 정합): project_id + role_id.
+    # team_session_id / agent_id 는 방 식별키가 아니라 현재 실행 세션·provenance 검증값이다.
+    team_session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     agent_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     room_type: Mapped[str] = mapped_column(Text, nullable=False, default="role")
@@ -43,6 +47,16 @@ class WebguiRoom(Base):
     unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        # canonical 유일성: (project_id, role_id) — 1 프로젝트 1 역할 1 방.
+        # 재부팅(team_session_id 변경)·agent_id 변화로 방을 증식시키지 않는다 (QI-WG-022).
+        Index(
+            "uk_webgui_room_project_role",
+            "project_id", "role_id",
+            unique=True,
+        ),
+    )
 
 
 class WebguiAgentSession(Base):
@@ -80,6 +94,13 @@ class WebguiMessage(Base):
     direction: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     message_type: Mapped[str] = mapped_column(Text, nullable=False, default="user_message")
+    # provenance: 메시지가 속한 팀 부팅 세션(현재값 아님, 생성 시점 고정). FE 세션 구분선용 (DV-41).
+    team_session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # transcript canonical 추적 필드 (DV-25, DS-30 §4.3)
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript_offset: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript_record_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)

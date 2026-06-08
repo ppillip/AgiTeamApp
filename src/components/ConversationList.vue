@@ -1,7 +1,22 @@
 <script>
 import Icon from "./Icon.vue";
 import { store, selectRoom } from "../stores/monitor.js";
-import { roleLabel } from "../api/adapters.js";
+import { roleLabel, connectionInfo } from "../api/adapters.js";
+import { cleanMessageText } from "../lib/sanitize.js";
+
+// 상태 tone → 배지/점 색 (LIVE=실연결 녹색 · 끊김=회색 · MOCK=목업 amber)
+const STATUS_CLASS = {
+  live: { badge: "bg-grn-tint text-grn-700", dot: "bg-grn" },
+  off: { badge: "bg-line-soft text-ink-500", dot: "bg-ink-300" },
+  mock: { badge: "bg-amber-tint text-amber-600", dot: "bg-amber" },
+};
+
+// 마지막 메시지 미리보기: 본문에 ANSI/터미널 chrome 잔재가 섞여 와도
+// 방어적으로 strip 하고 한 줄로 줄여 표시한다(목록은 markdown 렌더하지 않음).
+function previewText(s) {
+  const t = cleanMessageText(s).replace(/\s*\n+\s*/g, " ").trim();
+  return t || "—";
+}
 
 // 좌측 채팅방 목록 (S-02, WG-CHAT-01).
 // 식별·표시는 (project_id, role) + display_name. surface 는 노출하지 않는다.
@@ -20,15 +35,25 @@ export default {
   },
   methods: {
     roleLabel,
+    previewText,
     pick(room) {
       if (room.roomId !== store.selectedRoomId) selectRoom(room.roomId);
+    },
+    // 방 연결 상태 → {label, tone} (DS-60 §4.4). 연결 표식은 connection_state 기준 3종:
+    // connected=LIVE · disconnected=끊김 · 전역 degraded 또는 runtime_state=mock=MOCK.
+    // (데이터 출처 mock/real 신뢰는 말풍선 provenance 배지가 별도로 담당 — 차원 분리)
+    roomStatus(r) {
+      return connectionInfo(r.connectionState, r.runtimeState, { mock: store.degraded });
+    },
+    statusClass(tone, part) {
+      return (STATUS_CLASS[tone] || STATUS_CLASS.off)[part];
     },
   },
 };
 </script>
 
 <template>
-  <section class="flex w-[316px] flex-shrink-0 flex-col overflow-hidden rounded-2xl border border-line bg-white">
+  <section class="flex h-full w-full flex-col overflow-hidden rounded-2xl border border-line bg-white">
     <div class="flex items-center justify-between px-[18px] pt-[18px]">
       <h2 class="text-[16px] font-bold">채팅방</h2>
       <div class="flex gap-0.5">
@@ -59,8 +84,8 @@ export default {
           {{ r.mono }}
           <span
             class="absolute -bottom-0.5 -right-0.5 h-[11px] w-[11px] rounded-full border-2 border-white"
-            :class="r.connectionState === 'connected' ? 'bg-grn' : 'bg-ink-300'"
-            :title="r.connectionState === 'connected' ? '연결됨' : '끊김'"
+            :class="statusClass(roomStatus(r).tone, 'dot')"
+            :title="roomStatus(r).label"
           ></span>
         </div>
         <div class="min-w-0 flex-1">
@@ -74,12 +99,12 @@ export default {
             </span>
             <span v-if="r.unread" class="flex h-[18px] min-w-[18px] flex-shrink-0 items-center justify-center rounded-[9px] bg-amber px-[5px] text-[11px] font-bold text-white">{{ r.unread }}</span>
           </div>
-          <div class="mt-0.5 truncate text-[13px] text-ink-500">{{ r.lastText || "—" }}</div>
+          <div class="mt-0.5 truncate text-[13px] text-ink-500">{{ previewText(r.lastText) }}</div>
           <span
-            class="mt-[9px] inline-flex items-center gap-[5px] rounded-[7px] px-[9px] py-[3px] text-[11.5px] font-semibold"
-            :class="r.connectionState === 'connected' ? 'bg-grn-tint text-grn-700' : 'bg-line-soft text-ink-500'"
+            class="mt-[9px] inline-flex items-center gap-[5px] rounded-[7px] px-[9px] py-[3px] text-[11.5px] font-bold tracking-wide"
+            :class="statusClass(roomStatus(r).tone, 'badge')"
           >
-            <span class="h-1.5 w-1.5 rounded-full bg-current"></span>{{ r.connectionState === "connected" ? "연결됨" : "끊김" }}
+            <span class="h-1.5 w-1.5 rounded-full bg-current"></span>{{ roomStatus(r).label }}
           </span>
         </div>
       </button>
