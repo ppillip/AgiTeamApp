@@ -27,7 +27,7 @@ from .. import errors
 from ..config import Settings
 from ..db import repositories as repo
 from ..db.serializers import message_to_dict
-from .cmux_adapter import CmuxAdapter
+from .mux_port import MuxPort, get_mux_adapter
 from .cmux_discovery import DiscoveryRegistry, registry as default_registry
 from .events import hub
 from .masking import mask_payload
@@ -44,11 +44,12 @@ class PMBridge:
     def __init__(
         self,
         settings: Settings,
-        adapter: CmuxAdapter | None = None,
+        adapter: MuxPort | None = None,
         registry: DiscoveryRegistry | None = None,
     ) -> None:
         self.settings = settings
-        self.adapter = adapter or CmuxAdapter(settings.cmux_bin, settings.cmux_timeout_seconds)
+        # MuxPort 팩토리 경유(기본 cmux). 동작은 기존 CmuxAdapter 와 동일.
+        self.adapter = adapter or get_mux_adapter(settings)
         self.registry = registry or default_registry
 
     async def _refresh_discovery(self) -> None:

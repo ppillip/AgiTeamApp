@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     cmux_bin: str = "/Applications/cmux.app/Contents/Resources/bin/cmux"
     cmux_timeout_seconds: float = 15.0
 
+    # 멀티플렉서 추상화 (DS-70 / MX-20). 현 시점 유효 mux 는 cmux 만.
+    # 프로젝트별 transport.mux(agiteam.json)로 override 가능하나, tmux 는 미지원 가드.
+    mux: str = "cmux"                  # 기본 멀티플렉서. cross-project 발견은 항상 이 값(cmux) 사용
+    tmux_bin: str = "tmux"            # tmux adapter 자리(미구현). 절대경로는 tmux 구현 시 확정
+
     # 디스커버리/수집 (제우스 2026-06-07 확정)
     # 프로젝트 루트 해소: project_roots(JSON 매핑) 우선, 없으면 projects_base_dir/<project_id>
     projects_base_dir: Path = Field(default_factory=_default_projects_base)

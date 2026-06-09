@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .mux_port import MuxCapabilities, MuxPort
+
 
 logger = logging.getLogger(__name__)
 
@@ -321,10 +323,34 @@ async def _proxy_rpc(method: str, params: dict[str, Any], timeout: float) -> dic
     return await asyncio.to_thread(_proxy_rpc_sync, method, params, timeout)
 
 
-class CmuxAdapter:
+class CmuxAdapter(MuxPort):
+    """MuxPort 의 cmux 구현체 (DS-70 / MX-20).
+
+    현 동작 그대로 유지한다(절대경로 cmux 호출, argv 구성 동일). cmux 회귀 0.
+    """
+
+    mux_name = "cmux"
+
     def __init__(self, cmux_bin: str = "cmux", timeout: float = 15.0) -> None:
         self.cmux_bin = cmux_bin
         self.timeout = timeout
+
+    def capabilities(self) -> MuxCapabilities:
+        """cmux 기능 플래그 (DS-70 §5.1)."""
+        return MuxCapabilities(
+            mux="cmux",
+            send_text=True,
+            send_key=True,
+            read_screen=True,
+            watch_stream=True,   # events/hooks 또는 read polling 기반
+            events=True,
+            hooks=True,
+            list_surfaces=True,
+            open_surface=True,
+            label_surface=True,
+            label_color=True,
+            browser_control=True,  # cmux 전용
+        )
 
     def build_send_argv(
         self,

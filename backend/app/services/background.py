@@ -18,8 +18,8 @@ from typing import Any
 
 from ..config import Settings
 from ..db import repositories as repo
-from .cmux_adapter import CmuxAdapter
 from .cmux_discovery import DiscoveryRegistry, SurfaceInfo
+from .mux_port import MuxPort, get_mux_adapter
 from .events import hub
 from .log_collector import LogCollector
 from .transcript_collector import TranscriptCollector, session_registry_singleton
@@ -116,7 +116,7 @@ async def _sync_discovery_to_db(registry: DiscoveryRegistry, sessionmaker, chang
         await hub.publish(room_id, payload)
 
 
-async def discovery_loop(settings: Settings, registry: DiscoveryRegistry, adapter: CmuxAdapter, sessionmaker) -> None:
+async def discovery_loop(settings: Settings, registry: DiscoveryRegistry, adapter: MuxPort, sessionmaker) -> None:
     while True:
         try:
             tree = await adapter.tree()
@@ -171,7 +171,8 @@ class BackgroundManager:
         self._tasks: list[asyncio.Task] = []
 
     def start(self, settings: Settings, registry: DiscoveryRegistry, sessionmaker) -> None:
-        adapter = CmuxAdapter(settings.cmux_bin, settings.cmux_timeout_seconds)
+        # cross-project 발견(tree --all)은 항상 기본 mux(cmux). MuxPort 팩토리 경유.
+        adapter = get_mux_adapter(settings)
         transcript = TranscriptCollector(settings, registry, sessionmaker, session_registry_singleton)
         rawlog = LogCollector(settings, registry, sessionmaker)
         logger.info("starting background loops cmux_bin=%s", settings.cmux_bin)
