@@ -32,6 +32,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# 멀티라인 안전전송 (웹 모니터 Shift+Enter 결함 대응).
+# cmux send / surface.send_text 는 텍스트 내 \n·\r 을 Enter(제출)로 변환하므로
+# 멀티라인을 그대로 보내면 첫 개행에서 잘려 여러 명령으로 쪼개진다.
+#
+# [채택안: send-key shift+enter] PM 실측 결과 `cmux send-key shift+enter` 가 수신
+#   CLI(Claude Code·Codex) 양쪽 입력창에서 제출 없는 줄바꿈(soft newline)으로 동작함을
+#   확인했다. 따라서 멀티라인은 개행으로 분해해 각 줄을 send 하고, 줄 사이마다
+#   send-key shift+enter 로 줄바꿈을, 맨 끝에 send-key Enter 로 진짜 제출을 보낸다.
+#   (폐기) bracketed-paste(ESC 래핑) A안: cmux send 가 raw ESC(0x1b)를 통과 안 시켜
+#   마커가 입력창에 노출됨 → 전면 제거.
+# 단일라인(개행 없음)은 회귀 0 보장을 위해 기존 단일 send + Enter 경로를 그대로 탄다.
+_SOFT_NEWLINE_KEY = "shift+enter"  # 줄 사이 soft newline (제출 안 함)
+
+
+def _normalize_lines(message: str) -> list[str]:
+    """\\r\\n·\\r 을 \\n 으로 정규화한 뒤 줄 단위로 분해한다. 단일라인은 [message]."""
+    normalized = message.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.split("\n")
+
+
 _TREE_SURFACE_TTY_RE = re.compile(r"surface\s+(\S+).*?\stty=(\S+)")
 _LAUNCH_SH_RE = re.compile(r"(/\S+?/\.agiteam/agents/[^/\s]+/launch\.sh)")
 _ENV_TOKEN_RE = re.compile(
@@ -358,14 +378,20 @@ class CmuxAdapter(MuxPort):
         message: str,
         workspace_id: str | None = None,
     ) -> list[str]:
+        # 한 줄(개행 없음)을 보낸다. 멀티라인 분해는 submit() 가 담당한다.
         if workspace_id:
             return [self.cmux_bin, "send", "--workspace", workspace_id, "--surface", surface_id, message]
         return [self.cmux_bin, "send", "--surface", surface_id, message]
 
-    def build_send_key_argv(self, surface_id: str, workspace_id: str | None = None) -> list[str]:
+    def build_send_key_argv(
+        self,
+        surface_id: str,
+        workspace_id: str | None = None,
+        key: str = "Enter",
+    ) -> list[str]:
         if workspace_id:
-            return [self.cmux_bin, "send-key", "--workspace", workspace_id, "--surface", surface_id, "Enter"]
-        return [self.cmux_bin, "send-key", "--surface", surface_id, "Enter"]
+            return [self.cmux_bin, "send-key", "--workspace", workspace_id, "--surface", surface_id, key]
+        return [self.cmux_bin, "send-key", "--surface", surface_id, key]
 
     async def _rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         res = await _run_cmux(
@@ -487,6 +513,46 @@ class CmuxAdapter(MuxPort):
         res = await self.read_screen(surface_id, lines=1, workspace_id=workspace_id, tty=tty)
         return res["exit_code"] == 0
 
+    async def _send_text_once(
+        self,
+        surface_id: str,
+        text: str,
+        workspace_id: str | None,
+        tty: str | None,
+    ) -> dict[str, Any]:
+        """한 줄 텍스트 전송 (workspace 있으면 RPC, 없으면 caller-tty CLI)."""
+        if workspace_id:
+            return await self._rpc(
+                "surface.send_text",
+                {"workspace_id": workspace_id, "surface_id": surface_id, "text": text},
+            )
+        return await _run_with_caller_tty(
+            _with_socket_arg(self.build_send_argv(surface_id, text, workspace_id)),
+            self.timeout,
+            tty=tty,
+            env=_target_cmux_env(workspace_id, surface_id),
+        )
+
+    async def _send_key_once(
+        self,
+        surface_id: str,
+        key: str,
+        workspace_id: str | None,
+        tty: str | None,
+    ) -> dict[str, Any]:
+        """키 이벤트 전송 (Enter / shift+enter 등)."""
+        if workspace_id:
+            return await self._rpc(
+                "surface.send_key",
+                {"workspace_id": workspace_id, "surface_id": surface_id, "key": key},
+            )
+        return await _run_with_caller_tty(
+            _with_socket_arg(self.build_send_key_argv(surface_id, workspace_id, key)),
+            self.timeout,
+            tty=tty,
+            env=_target_cmux_env(workspace_id, surface_id),
+        )
+
     async def submit(
         self,
         surface_id: str,
@@ -494,35 +560,30 @@ class CmuxAdapter(MuxPort):
         workspace_id: str | None = None,
         tty: str | None = None,
     ) -> dict[str, Any]:
-        """send + send-key Enter atomic submit. DS-60 결과 schema 로 반환."""
+        """안전 제출. 단일라인은 send + send-key Enter(기존 동작 그대로, 회귀 0).
+
+        멀티라인은 개행으로 분해해 각 줄을 send 하고, 줄 사이마다 send-key shift+enter
+        (제출 없는 줄바꿈)를, 맨 끝에 send-key Enter(진짜 제출)를 보낸다.
+        """
         started = _now_iso()
-        send = {"exit_code": None, "stdout": "", "stderr": "skipped"}
+        lines = _normalize_lines(message)
+        if len(lines) <= 1:
+            return await self._submit_single(surface_id, message, workspace_id, tty, started)
+        return await self._submit_multiline(surface_id, lines, workspace_id, tty, started)
+
+    async def _submit_single(
+        self,
+        surface_id: str,
+        message: str,
+        workspace_id: str | None,
+        tty: str | None,
+        started: str,
+    ) -> dict[str, Any]:
+        """단일라인 제출 — 기존 동작 보존(send 성공 시에만 Enter)."""
         send_key: dict[str, Any] = {"exit_code": None, "stdout": "", "stderr": "skipped"}
-        if workspace_id:
-            send = await self._rpc(
-                "surface.send_text",
-                {"workspace_id": workspace_id, "surface_id": surface_id, "text": message},
-            )
-            if send["exit_code"] == 0:
-                send_key = await self._rpc(
-                    "surface.send_key",
-                    {"workspace_id": workspace_id, "surface_id": surface_id, "key": "Enter"},
-                )
-        else:
-            send = await _run_with_caller_tty(
-                _with_socket_arg(self.build_send_argv(surface_id, message, workspace_id)),
-                self.timeout,
-                tty=tty,
-                env=_target_cmux_env(workspace_id, surface_id),
-            )
-        # send 성공 시에만 Enter 전송. (send 실패 시 제출 안 된 것으로 간주)
-        if send["exit_code"] == 0 and send_key["exit_code"] is None:
-            send_key = await _run_with_caller_tty(
-                _with_socket_arg(self.build_send_key_argv(surface_id, workspace_id)),
-                self.timeout,
-                tty=tty,
-                env=_target_cmux_env(workspace_id, surface_id),
-            )
+        send = await self._send_text_once(surface_id, message, workspace_id, tty)
+        if send["exit_code"] == 0:
+            send_key = await self._send_key_once(surface_id, "Enter", workspace_id, tty)
         ended = _now_iso()
         submitted = send["exit_code"] == 0 and send_key["exit_code"] == 0
         return {
@@ -532,6 +593,53 @@ class CmuxAdapter(MuxPort):
             "send": send,
             "send_key": send_key,
             "submitted": submitted,
+            "started_at": started,
+            "ended_at": ended,
+        }
+
+    async def _submit_multiline(
+        self,
+        surface_id: str,
+        lines: list[str],
+        workspace_id: str | None,
+        tty: str | None,
+        started: str,
+    ) -> dict[str, Any]:
+        """멀티라인 제출 — 줄 사이 shift+enter, 끝에 Enter."""
+        steps: list[dict[str, Any]] = []
+        last_send: dict[str, Any] = {"exit_code": None, "stdout": "", "stderr": "skipped"}
+        send_key: dict[str, Any] = {"exit_code": None, "stdout": "", "stderr": "skipped"}
+        ok = True
+        for index, line in enumerate(lines):
+            if index > 0:
+                # 줄 사이: soft newline (제출 안 함)
+                nl = await self._send_key_once(surface_id, _SOFT_NEWLINE_KEY, workspace_id, tty)
+                steps.append({"send_key": nl})
+                if nl["exit_code"] != 0:
+                    ok = False
+                    break
+            if line == "":
+                # 빈 줄은 위 shift+enter 로 이미 줄바꿈됨. cmux send "" 호출 회피.
+                continue
+            s = await self._send_text_once(surface_id, line, workspace_id, tty)
+            last_send = s
+            steps.append({"send": s})
+            if s["exit_code"] != 0:
+                ok = False
+                break
+        if ok:
+            send_key = await self._send_key_once(surface_id, "Enter", workspace_id, tty)
+            steps.append({"send_key": send_key})
+        ended = _now_iso()
+        submitted = ok and send_key.get("exit_code") == 0
+        return {
+            "surface_id": surface_id,
+            "workspace_id": workspace_id,
+            "tty": tty,
+            "send": last_send,
+            "send_key": send_key,
+            "submitted": submitted,
+            "steps": steps,
             "started_at": started,
             "ended_at": ended,
         }

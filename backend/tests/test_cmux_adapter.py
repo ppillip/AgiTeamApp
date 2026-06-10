@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from app.services.cmux_adapter import CmuxAdapter, _parse_env_from_process_text, _parse_launch_env_text
+from app.services.cmux_adapter import (
+    _SOFT_NEWLINE_KEY,
+    CmuxAdapter,
+    _normalize_lines,
+    _parse_env_from_process_text,
+    _parse_launch_env_text,
+)
 
 
 def _make_fake_cmux(tmp_path: Path, exit_code: int = 0) -> str:
@@ -32,6 +38,73 @@ def test_build_argv_uses_array_no_shell():
     argv = a.build_send_argv("surface:01", "rm -rf /; echo hacked")
     assert argv == ["cmux", "send", "--surface", "surface:01", "rm -rf /; echo hacked"]
     assert a.build_send_key_argv("surface:01") == ["cmux", "send-key", "--surface", "surface:01", "Enter"]
+
+
+def test_normalize_lines_singleline():
+    # 개행 없으면 한 줄짜리 리스트(단일라인 판정 근거).
+    assert _normalize_lines("hello world") == ["hello world"]
+    assert _normalize_lines("") == [""]
+
+
+def test_normalize_lines_splits_and_normalizes_crlf():
+    assert _normalize_lines("line1\nline2\nline3") == ["line1", "line2", "line3"]
+    assert _normalize_lines("a\r\nb") == ["a", "b"]
+    assert _normalize_lines("a\rb") == ["a", "b"]
+
+
+def test_soft_newline_key_is_shift_enter():
+    assert _SOFT_NEWLINE_KEY == "shift+enter"
+
+
+def test_build_send_argv_passes_line_literally():
+    # build_send_argv 는 한 줄을 그대로 전달(변환·래핑 없음).
+    a = CmuxAdapter("cmux")
+    assert a.build_send_argv("surface:01", "line1") == [
+        "cmux", "send", "--surface", "surface:01", "line1",
+    ]
+
+
+def test_build_send_key_argv_accepts_custom_key():
+    a = CmuxAdapter("cmux")
+    # 기본은 Enter(회귀 0)
+    assert a.build_send_key_argv("surface:01") == [
+        "cmux", "send-key", "--surface", "surface:01", "Enter",
+    ]
+    # shift+enter 도 구성 가능
+    assert a.build_send_key_argv("surface:01", None, "shift+enter") == [
+        "cmux", "send-key", "--surface", "surface:01", "shift+enter",
+    ]
+    assert a.build_send_key_argv("surface:01", "workspace:40", "shift+enter") == [
+        "cmux", "send-key", "--workspace", "workspace:40", "--surface", "surface:01", "shift+enter",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_multiline_uses_shift_enter_between_lines(tmp_path):
+    cmux = _make_fake_cmux(tmp_path, exit_code=0)
+    a = CmuxAdapter(cmux, timeout=5)
+    res = await a.submit("surface:01", "first line\nsecond line")
+    assert res["submitted"] is True
+    log = (tmp_path / "calls.log").read_text(encoding="utf-8")
+    lines = [ln for ln in log.splitlines() if ln.strip()]
+    # 순서: send first line → send-key shift+enter → send second line → send-key Enter
+    assert lines == [
+        "send --surface surface:01 first line",
+        "send-key --surface surface:01 shift+enter",
+        "send --surface surface:01 second line",
+        "send-key --surface surface:01 Enter",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_multiline_three_lines_two_soft_newlines(tmp_path):
+    cmux = _make_fake_cmux(tmp_path, exit_code=0)
+    a = CmuxAdapter(cmux, timeout=5)
+    res = await a.submit("surface:01", "a\nb\nc")
+    assert res["submitted"] is True
+    log = (tmp_path / "calls.log").read_text(encoding="utf-8")
+    assert log.count("shift+enter") == 2  # 줄 사이 2회
+    assert log.count("send-key --surface surface:01 Enter") == 1  # 끝 제출 1회
 
 
 def test_build_argv_can_scope_workspace():

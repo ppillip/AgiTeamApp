@@ -103,7 +103,14 @@ async def list_messages(
     return ok(
         {
             "room": room_summary_dict(room, last, cs, connection_state=conn_state),
-            "messages": [message_to_dict(m, runtime_state=("live" if conn_state == "connected" else "disconnected")) for m in rows],
+            "messages": [
+                message_to_dict(
+                    m,
+                    runtime_state=("live" if conn_state == "connected" else "disconnected"),
+                    project_id=room.project_id,
+                )
+                for m in rows
+            ],
             "page": {"limit": limit, "next_cursor": next_cursor, "has_more": has_more},
         }
     )

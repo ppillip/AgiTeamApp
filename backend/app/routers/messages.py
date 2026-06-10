@@ -58,7 +58,10 @@ async def get_message(message_id: str, db: AsyncSession = Depends(get_db)):
                     "occurred_at": e.occurred_at,
                 }
             )
-    return ok({"message": message_to_dict(msg), "related_updates": related})
+    # DS-40 §8 공개계약(QI-WG-029): message.project_id 채움 — 소속 room 에서 해소.
+    room = await repo.get_room(db, msg.room_id)
+    pid = room.project_id if room else None
+    return ok({"message": message_to_dict(msg, project_id=pid), "related_updates": related})
 
 
 def _parse_after_cursor(after: str | None) -> datetime | None:
@@ -84,16 +87,23 @@ def _parse_after_cursor(after: str | None) -> datetime | None:
 @router.get("/message-updates", dependencies=[Depends(require_auth)])
 async def message_updates(
     room_id: str = Query(...),
+    project_id: str = Query(...),
     after: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    """WG-MSG-04 polling fallback. message + runtime_event 를 MessageUpdate 로 합성."""
+    """WG-MSG-04 polling fallback. message + runtime_event 를 MessageUpdate 로 합성.
+
+    project_id 는 프로젝트 격리 방어키다(DS-40 §9.1 필수). 조회한 room 이 해당
+    project 에 속하지 않으면 cross-project 누수를 막기 위해 room_not_found(404)로
+    은닉 거절한다(존재 여부 비노출, DS-40 §21). A-F1 결함수정 2026-06-10:
+    아테나 원설계 판정 = API 경계에서 project_id 방어검증 강제(UUID 신뢰 완화 아님).
+    """
     from .. import errors
 
     after_dt = _parse_after_cursor(after)
     room = await repo.get_room(db, room_id)
-    if room is None:
+    if room is None or room.project_id != project_id:
         raise errors.room_not_found()
     msgs = await repo.updates_since(db, room.room_id, after_dt, limit)
     updates = []
@@ -107,7 +117,7 @@ async def message_updates(
                 "room_id": str(m.room_id),
                 "correlation_id": str(m.correlation_id) if m.correlation_id else None,
                 "update_type": ut,
-                "message": message_to_dict(m),
+                "message": message_to_dict(m, transport="polling", project_id=room.project_id),
                 "event": None,
                 "occurred_at": m.occurred_at,
             }
@@ -116,6 +126,36 @@ async def message_updates(
         f"{msgs[-1].recorded_at.isoformat()}|message:{msgs[-1].message_id}" if msgs else None
     )
     return ok({"updates": updates, "next_cursor": next_cursor})
+
+
+def _message_update_payload(m, project_id: str | None = None) -> dict:
+    """WS push/replay 공통 MessageUpdate envelope.
+
+    collector/pm_bridge 의 hub.publish payload 와 동일 형태로 만들어, gap replay 와
+    실시간 push 를 FE 가 구분 없이 처리하게 한다(QI-WG-030).
+    """
+    ut = (
+        "message_received"
+        if m.direction == "inbound"
+        else "message_sent"
+        if m.status == "sent"
+        else "message_failed"
+        if m.status == "failed"
+        else "message_streaming"
+    )
+    return {
+        "type": "message_update",
+        "cursor": f"{m.recorded_at.isoformat()}|message:{m.message_id}",
+        "data": {
+            "update_id": f"message:{m.message_id}",
+            "room_id": str(m.room_id),
+            "correlation_id": str(m.correlation_id) if m.correlation_id else None,
+            "update_type": ut,
+            "message": message_to_dict(m, transport="websocket", project_id=project_id),
+            "event": None,
+            "occurred_at": m.occurred_at,
+        },
+    }
 
 
 @router.websocket("/message-stream")
@@ -135,10 +175,46 @@ async def message_stream(ws: WebSocket):
             await ws.close(code=4401)
             return
 
-    await ws.accept()
+    # WG-MSG-05 프로젝트 격리(A-F1 후속, message-updates 와 동일 계약): project_id 필수.
+    # project_id 없는 구독은 hub 전역 구독이 되어 타 프로젝트 push 까지 받으므로 거절한다.
+    project_id = ws.query_params.get("project_id")
+    if not project_id:
+        await ws.close(code=4400)  # missing project_id
+        return
     room_param = ws.query_params.get("room_id")
+    # room_id 지정 시 그 방이 project 에 속하는지 방어검증(타 프로젝트 방 구독 차단).
+    # 존재 여부 비노출을 위해 미존재·불일치 모두 동일하게 거절한다(DS-40 §21).
+    if room_param:
+        from ..db.base import get_sessionmaker
+
+        async with get_sessionmaker()() as db:
+            room = await repo.get_room(db, room_param)
+        if room is None or room.project_id != project_id:
+            await ws.close(code=4404)  # room not found / cross-project
+            return
+    await ws.accept()
     rooms: set[str] | None = {room_param} if room_param else None
-    q = await hub.register(rooms)
+    q = await hub.register(rooms, project_id)
+    # QI-WG-030: 재연결 gap replay (DS-40 §10 / DS-60 §8.4). room 지정 + after cursor 면
+    # 연결 직후 그 cursor 이후 메시지를 먼저 흘려보내 끊긴 구간을 복구한다. 전역 구독
+    # (room 미지정)은 replay 대상이 모호하므로 생략하고 실시간 push 만 받는다.
+    after = ws.query_params.get("after")
+    if room_param and after:
+        from .. import errors as _errs
+        from ..db.base import get_sessionmaker
+
+        try:
+            after_dt = _parse_after_cursor(after)
+        except _errs.WebguiError:
+            after_dt = None  # 깨진 cursor 는 replay 생략(실시간만), WS 는 끊지 않는다
+        if after_dt is not None:
+            async with get_sessionmaker()() as db:
+                missed = await repo.updates_since(db, room_param, after_dt, 200)
+            for m in missed:
+                try:
+                    await ws.send_json(jsonable_encoder(_message_update_payload(m, project_id)))
+                except Exception:
+                    break
     try:
         while True:
             push_task = asyncio.create_task(q.get())

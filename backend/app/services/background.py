@@ -56,7 +56,7 @@ async def _sync_discovery_to_db(registry: DiscoveryRegistry, sessionmaker, chang
             room = await _upsert_discovered_room(db, info)
             rooms_by_key[(info.project_id, info.role_id)] = room
 
-        published: list[tuple[str, dict[str, Any]]] = []
+        published: list[tuple[str, dict[str, Any], str]] = []
         for change in changes:
             key = (change["project_id"], change["role_id"])
             room = rooms_by_key.get(key)
@@ -108,12 +108,13 @@ async def _sync_discovery_to_db(registry: DiscoveryRegistry, sessionmaker, chang
                             "occurred_at": ev.occurred_at.isoformat(),
                         },
                     },
+                    room.project_id,
                 )
             )
         await db.commit()
 
-    for room_id, payload in published:
-        await hub.publish(room_id, payload)
+    for room_id, payload, project_id in published:
+        await hub.publish(room_id, payload, project_id)
 
 
 async def discovery_loop(settings: Settings, registry: DiscoveryRegistry, adapter: MuxPort, sessionmaker) -> None:

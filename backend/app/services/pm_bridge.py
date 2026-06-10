@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import errors
 from ..config import Settings
 from ..db import repositories as repo
-from ..db.serializers import message_to_dict
+from ..db.serializers import message_to_dict, provenance_dict
 from .mux_port import MuxPort, get_mux_adapter
 from .cmux_discovery import DiscoveryRegistry, registry as default_registry
 from .events import hub
@@ -142,7 +142,11 @@ class PMBridge:
                     (ping_result.get("stdout") or "")[:200],
                     (ping_result.get("stderr") or "")[:500],
                 )
-                raise errors.surface_not_found()
+                # QI-WG-021/023: non-terminal surface 로 인한 구조적 실패면 진단 detail 첨부.
+                # discovery terminal 필터로 재해소 시 보통 걸러지지만, 경합으로 남았을 때 방어.
+                stderr = (ping_result.get("stderr") or "").lower()
+                details = {"reason": "not_terminal"} if "not a terminal" in stderr else None
+                raise errors.surface_not_found(details)
 
         # 3) PM 방 upsert (식별 키 = project_id, role). surface 는 일시값으로만 기록.
         room = await repo.upsert_room(
@@ -197,7 +201,8 @@ class PMBridge:
         )
         await db.commit()
 
-        message = message_to_dict(msg)
+        # DS-40 §7.2 공개계약(QI-WG-029): message 에 project_id + provenance(transport=rest).
+        message = message_to_dict(msg, transport="rest", project_id=project_id)
         # 프론트 dedup: WS broadcast message 에도 client_message_id 를 포함시켜
         # 낙관적(optimistic) 말풍선과 서버 말풍선을 상관시켜 중복 표시를 방지한다.
         message["client_message_id"] = client_message_id
@@ -206,12 +211,15 @@ class PMBridge:
             "send_submitted": submitted,
             "message_id": str(msg.message_id),
             "correlation_id": str(correlation_id),
+            "project_id": project_id,                # DS-40 §7.2 공개계약 (QI-WG-029)
             "room_id": str(room.room_id),
             "role": PM_ROLE_ID,
             "surface_id": surface_id,
-            "workspace_id": workspace_id,
+            "workspace_id": workspace_id,            # 내부 디버그값(호환 유지)
             "agent_session_id": None,
             "status": msg.status,
+            # ack provenance: PM bridge 가 REST 로 제출한 실데이터 (DS-40 §7.2)
+            "provenance": provenance_dict("pm_bridge", runtime_state="live", transport="rest"),
             "client_message_id": client_message_id,
             "submitted_at": result.get("ended_at"),
         }
@@ -231,6 +239,7 @@ class PMBridge:
                     "occurred_at": msg.occurred_at.isoformat(),
                 },
             },
+            project_id=room.project_id,
         )
 
         if not submitted:

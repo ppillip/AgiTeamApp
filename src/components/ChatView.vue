@@ -23,6 +23,9 @@ const PROV_CLASS = {
 export default {
   name: "ChatView",
   components: { Icon },
+  // mobile(UI-06): 모바일 레이아웃에서 true. 말풍선 max-width 를 거의 풀폭으로 넓히고
+  // thread 좌우 패딩을 줄여 좁은 화면 가용폭을 최대한 쓴다(데스크탑은 prop 미전달=false → 무변경).
+  props: { mobile: { type: Boolean, default: false } },
   data() {
     return { prevScrollHeight: null };
   },
@@ -217,7 +220,7 @@ export default {
       </div>
 
       <!-- 스레드 -->
-      <div ref="thread" @scroll="onThreadScroll" class="flex flex-1 flex-col gap-[22px] overflow-y-auto bg-white px-7 py-6 nice-scroll">
+      <div ref="thread" @scroll="onThreadScroll" class="flex flex-1 flex-col overflow-y-auto bg-white nice-scroll" :class="mobile ? 'gap-4 px-3 py-4' : 'gap-[22px] px-7 py-6'">
         <div v-if="store.messagesLoading" class="flex flex-1 items-center justify-center text-[13px] text-ink-400">대화를 불러오는 중…</div>
         <div v-else-if="!messages.length" class="flex flex-1 items-center justify-center text-[13px] text-ink-400">아직 메시지가 없습니다.</div>
 
@@ -239,7 +242,7 @@ export default {
           </div>
 
           <!-- 메시지 -->
-          <div v-else :class="['flex max-w-[74%] gap-3', it.m.out ? 'ml-auto flex-row' : '']">
+          <div v-else :class="['flex gap-3', mobile ? 'max-w-[96%]' : 'max-w-[74%]', it.m.out ? 'ml-auto flex-row' : '']">
             <!-- 받은(좌측) 아바타 -->
             <div
               v-if="!it.m.out"

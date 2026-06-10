@@ -51,9 +51,16 @@ export async function sendMessage({ projectId, text, clientMessageId }) {
   return data; // { ack, message }
 }
 
-// WG-MSG-04 — polling fallback
-export async function fetchUpdates(roomId, after) {
-  const data = await http.get(`${P}/message-updates`, { room_id: roomId, after });
+// WG-MSG-04 — polling fallback.
+// project_id 를 반드시 실어 보낸다(A-F1: BE 가 /message-updates 에 project_id 필수화 —
+// 멀티프로젝트 격리 방어). 누락 시 BE 가 거절한다. project_id 는 호출부가 활성 프로젝트
+// 컨텍스트(store.selectedProjectId)에서 전달한다.
+export async function fetchUpdates(roomId, after, projectId) {
+  const data = await http.get(`${P}/message-updates`, {
+    project_id: projectId || undefined,
+    room_id: roomId,
+    after,
+  });
   return data; // { updates, next_cursor }
 }
 

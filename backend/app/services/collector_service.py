@@ -21,6 +21,7 @@ from ..db.serializers import event_to_dict, message_to_dict
 from . import hook_normalizer
 from .events import hub
 from .masking import mask_payload, mask_text
+from .sanitizer import sanitize_tool_leak
 from .transcript_collector import TranscriptCollector, session_registry_singleton
 
 # message body canonical source (DV-25)
@@ -95,10 +96,10 @@ async def collect_message(db: AsyncSession, room_id: str, body) -> dict:
     if provider and record_id:
         existing = await repo.find_message_by_record(db, provider, record_id)
         if existing is not None:
-            return {"message": message_to_dict(existing), "deduplicated": True}
+            return {"message": message_to_dict(existing, project_id=room.project_id), "deduplicated": True}
     existing = await repo.find_message_by_hash(db, room.room_id, body.source, raw_hash)
     if existing is not None:
-        return {"message": message_to_dict(existing), "deduplicated": True}
+        return {"message": message_to_dict(existing, project_id=room.project_id), "deduplicated": True}
 
     is_inbound = body.message_type in _INBOUND_TYPES or body.message_type == "unmatched"
     direction = "inbound" if is_inbound else "outbound"
@@ -131,7 +132,9 @@ async def collect_message(db: AsyncSession, room_id: str, body) -> dict:
         transcript_offset=getattr(body, "transcript_offset", None),
         transcript_record_id=record_id,
         raw_text=mask_text(body.raw_text),
-        normalized_text=body.normalized_text,
+        # tool-call 누출 차단(2026-06-10): 표시·저장되는 normalized 만 sanitize.
+        # raw_text/raw_hash 는 원본 유지 → dedup 거동 불변.
+        normalized_text=sanitize_tool_leak(body.normalized_text),
         raw_hash=raw_hash,
         status=status,
         occurred_at=body.occurred_at,
@@ -139,7 +142,7 @@ async def collect_message(db: AsyncSession, room_id: str, body) -> dict:
     await repo.touch_room_last_message(db, room, msg, inbound=is_inbound)
     await db.commit()
 
-    payload = message_to_dict(msg)
+    payload = message_to_dict(msg, transport="websocket", project_id=room.project_id)
     await hub.publish(
         str(room.room_id),
         {
@@ -155,6 +158,7 @@ async def collect_message(db: AsyncSession, room_id: str, body) -> dict:
                 "occurred_at": msg.occurred_at.isoformat(),
             },
         },
+        project_id=room.project_id,
     )
     return {"message": payload, "deduplicated": False}
 
@@ -250,6 +254,7 @@ async def collect_event(db: AsyncSession, room_id: str, body, collector: Transcr
                     "occurred_at": ev.occurred_at.isoformat(),
                 },
             },
+            project_id=room.project_id,
         )
     return {"event": event_to_dict(ev)}
 

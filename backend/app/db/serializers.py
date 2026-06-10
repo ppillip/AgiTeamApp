@@ -14,37 +14,52 @@ def _s(v: Any) -> Any:
     return str(v) if v is not None else None
 
 
-# 실데이터로 인정하는 source (DS-40 provenance): hook/transcript/bridge 는 실제 에이전트 산출.
-_REAL_SOURCES = {"hook", "transcript", "bridge", "pm_bridge"}
-# 수동(UI 사용자 입력) source
-_MANUAL_SOURCES = {"webgui"}
+# 실데이터로 인정하는 origin (DS-40 §6): hook/transcript/bridge/pm_bridge 는 실제 에이전트
+# 산출, webgui 는 사용자가 실제 입력한 데이터다(QI-WG-029: DS-40 §6 "...webgui...면 true").
+_REAL_SOURCES = {"hook", "transcript", "bridge", "pm_bridge", "webgui"}
 
 
-def provenance_dict(source: str | None, *, runtime_state: str = "live") -> dict[str, Any]:
-    """DS-40 Provenance: 메시지/방의 출처·실데이터 여부·런타임 상태.
+def provenance_dict(
+    source: str | None, *, runtime_state: str = "live", transport: str | None = None
+) -> dict[str, Any]:
+    """DS-40 §6 Provenance: origin/runtime_state/is_real_data/is_mock/transport (QI-WG-029).
 
-    source: hook/transcript/bridge=real, webgui=manual(수동), 그 외=mock.
-    runtime_state: live | disconnected | mock. 실데이터 아니면 mock 으로 강제.
+    origin: hook/transcript/bridge/pm_bridge/webgui=real, mock/None=mock, 그 외(manual/
+            injected/diagnostic)=실데이터 아님이지만 목업도 아님.
+    runtime_state: live | mock | disconnected. 실데이터 아니면 mock 으로 강제.
+    is_mock: 목업·샘플이면 true(이때 is_real_data=false 고정, DS-40 §6).
+    transport: websocket | polling | rest | internal (선택).
     """
-    if source in _REAL_SOURCES:
-        kind = "real"
-    elif source in _MANUAL_SOURCES:
-        kind = "manual"
-    else:
-        kind = "mock"
-    is_real = kind == "real"
-    rs = runtime_state if is_real else ("manual" if kind == "manual" else "mock")
-    return {
-        "source": source,
-        "kind": kind,                 # real | manual | mock
+    origin = source if source is not None else "mock"
+    is_real = origin in _REAL_SOURCES
+    is_mock = origin == "mock"
+    rs = runtime_state if is_real else "mock"
+    out: dict[str, Any] = {
+        "origin": origin,
+        "runtime_state": rs,          # live | mock | disconnected
         "is_real_data": is_real,
-        "runtime_state": rs,          # live | disconnected | mock | manual
+        "is_mock": is_mock,
     }
+    if transport is not None:
+        out["transport"] = transport
+    return out
 
 
-def message_to_dict(m: WebguiMessage, *, runtime_state: str = "live") -> dict[str, Any]:
+def message_to_dict(
+    m: WebguiMessage,
+    *,
+    runtime_state: str = "live",
+    transport: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """DS-40 §7.2/§8 메시지 공개 응답. project_id 는 프로젝트 격리 공개키(QI-WG-029).
+
+    project_id 는 WebguiMessage 컬럼이 아니라 소속 room 의 값이므로 호출처가 주입한다
+    (room 을 모르는 호출처는 None — 점진적 채움).
+    """
     return {
         "message_id": str(m.message_id),
+        "project_id": project_id,                    # DS-40 §7.2 공개계약 (QI-WG-029)
         "room_id": str(m.room_id),
         "correlation_id": _s(m.correlation_id),
         "role": m.role_id,
@@ -56,7 +71,7 @@ def message_to_dict(m: WebguiMessage, *, runtime_state: str = "live") -> dict[st
         "message_type": m.message_type,
         "text": m.normalized_text,
         "status": m.status,
-        "provenance": provenance_dict(m.source, runtime_state=runtime_state),
+        "provenance": provenance_dict(m.source, runtime_state=runtime_state, transport=transport),
         "occurred_at": m.occurred_at,
         "recorded_at": m.recorded_at,
         "updated_at": m.updated_at,

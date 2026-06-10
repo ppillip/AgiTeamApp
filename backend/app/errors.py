@@ -74,8 +74,10 @@ def not_ready() -> WebguiError:
     return WebguiError("not_ready", 409, "Target role is not ready.")
 
 
-def surface_not_found() -> WebguiError:
-    return WebguiError("surface_not_found", 409, "No active cmux surface for target role.")
+def surface_not_found(details: dict | None = None) -> WebguiError:
+    # details 예: {"reason": "not_terminal"} — non-terminal surface 로 ping 실패한 경우 진단용
+    # (QI-WG-021/023). secret/절대경로는 담지 않는다(DS-40 §21).
+    return WebguiError("surface_not_found", 409, "No active cmux surface for target role.", details)
 
 
 def send_failed(details: dict | None = None) -> WebguiError:

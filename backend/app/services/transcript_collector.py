@@ -32,6 +32,7 @@ from ..db import repositories as repo
 from .cmux_discovery import DiscoveryRegistry
 from .events import hub
 from .masking import mask_text
+from .sanitizer import sanitize_tool_leak
 from .transcript_parser import (
     PROVIDER_CLAUDE,
     PROVIDER_CODEX,
@@ -378,7 +379,8 @@ class TranscriptCollector:
                 transcript_offset=str(sess.offset),
                 transcript_record_id=record_id,
                 raw_text=mask_text(text),
-                normalized_text=text,
+                # tool-call 누출 차단(2026-06-10): normalized 만 sanitize. raw_text/raw_hash 원본 유지.
+                normalized_text=sanitize_tool_leak(text),
                 raw_hash=raw_hash,
                 status=status,
                 occurred_at=occurred,
@@ -401,6 +403,7 @@ class TranscriptCollector:
                         "occurred_at": occurred.isoformat(),
                     },
                 },
+                project_id=room.project_id,
             )
         return 1
 

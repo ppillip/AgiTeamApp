@@ -6,6 +6,7 @@ import ChatView from "./components/ChatView.vue";
 import ArtifactPanel from "./components/ArtifactPanel.vue";
 import ArtifactViewer from "./components/ArtifactViewer.vue";
 import TeamView from "./components/TeamView.vue";
+import RoomSwitcher from "./components/RoomSwitcher.vue";
 import { store, boot, teardown, selectedProject, selectRoom, loadRoomPreviews } from "./stores/monitor.js";
 
 // 메인 셸 (S-01): 헤더(프로젝트 선택·연결상태) + 좌(채팅방)·중(대화)·우(산출물) 3분할.
@@ -22,10 +23,12 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 export default {
   name: "App",
-  components: { Icon, ProjectSwitcher, ConversationList, ChatView, ArtifactPanel, ArtifactViewer, TeamView },
+  components: { Icon, ProjectSwitcher, ConversationList, ChatView, ArtifactPanel, ArtifactViewer, TeamView, RoomSwitcher },
   data() {
     // artifactBig: '크게'(UI-02) — 채팅 영역 자리에 큰 산출물 뷰. 우측 트리는 유지(파일 클릭 시 큰 뷰 교체).
-    return { leftW: 316, rightW: 400, drag: null, viewMode: "single", artifactBig: false };
+    // isMobile(UI-06): 모바일 반응형 — 상단 프로젝트/채팅방 셀렉터 + 채팅만, 좌우 패널·팀뷰·보기토글 숨김.
+    //   데스크탑 코드 경로는 그대로 두고 모바일을 별도 분기로 처리(회귀 방지). matchMedia(<768px) 단일 소스.
+    return { leftW: 316, rightW: 400, drag: null, viewMode: "single", artifactBig: false, isMobile: false };
   },
   computed: {
     store: () => store,
@@ -116,14 +119,25 @@ export default {
         if (this.leftW + this.rightW > avail) this.leftW = Math.max(LEFT_MIN, avail - this.rightW);
       } catch {}
     },
+    // 모바일 breakpoint 변화 핸들러(matchMedia change). <768px = 모바일.
+    onMqlChange(e) {
+      this.isMobile = e.matches;
+    },
   },
   mounted() {
     this.restoreWidths();
+    // 모바일 감지(UI-06): matchMedia 로 768px 미만이면 모바일 레이아웃. resize 시 자동 전환.
+    if (typeof window !== "undefined" && window.matchMedia) {
+      this._mql = window.matchMedia("(max-width: 767px)");
+      this.isMobile = this._mql.matches;
+      this._mql.addEventListener("change", this.onMqlChange);
+    }
     boot();
   },
   beforeUnmount() {
     window.removeEventListener("mousemove", this.onDrag);
     window.removeEventListener("mouseup", this.endDrag);
+    if (this._mql) this._mql.removeEventListener("change", this.onMqlChange);
     teardown();
   },
 };
@@ -143,8 +157,8 @@ export default {
         </div>
         <div class="mx-1 h-7 w-px bg-line"></div>
         <ProjectSwitcher />
-        <!-- 보기 토글(UI-04): 전체 팀원 보기 ↔ 단일 방 보기 -->
-        <div class="inline-flex items-center gap-1 rounded-[11px] border border-line bg-[#F7F7F8] p-[3px]">
+        <!-- 보기 토글(UI-04): 전체 팀원 보기 ↔ 단일 방 보기. 모바일(UI-06)에선 숨김(채팅만 표시) -->
+        <div v-if="!isMobile" class="inline-flex items-center gap-1 rounded-[11px] border border-line bg-[#F7F7F8] p-[3px]">
           <button
             @click="setView('team')"
             class="h-[30px] rounded-lg px-3 text-[12.5px] font-bold whitespace-nowrap transition-colors"
@@ -158,7 +172,8 @@ export default {
         </div>
       </div>
 
-      <div class="flex items-center gap-2.5">
+      <!-- 전역 상태 배지(모바일 UI-06 에선 숨김 — 상단엔 프로젝트/채팅방 셀렉터만) -->
+      <div v-if="!isMobile" class="flex items-center gap-2.5">
         <!-- 전역 상태 3종 (DS-60 §4.4): MOCK(목업) · LIVE(실연결) · 끊김. 실데이터 위장 금지. -->
         <span
           v-if="store.degraded"
@@ -179,9 +194,16 @@ export default {
       </div>
     </header>
 
+    <!-- 모바일 레이아웃(UI-06): 상단 채팅방 셀렉터 + 가운데 채팅만. 좌우 패널·산출물·팀뷰 숨김.
+         입력 정책은 ChatView 가 그대로 적용(canCompose=PM 방만 입력, 나머지 read-only). -->
+    <div v-if="isMobile" class="flex min-h-0 flex-1 flex-col gap-2.5 p-[10px]">
+      <RoomSwitcher />
+      <ChatView mobile />
+    </div>
+
     <!-- 단일 방 보기(기존 3분할): 좌/우 패널은 드래그로 폭 조절(UI-01). 중앙(대화)은 나머지(flex-1)를
          채우며 최소폭 보장(좁은 화면 말풍선 세로 잘림 방지) + 그 이하 폭에선 가로 스크롤 폴백 -->
-    <div v-if="viewMode === 'single'" class="flex min-h-0 flex-1 overflow-x-auto p-[14px]">
+    <div v-else-if="viewMode === 'single'" class="flex min-h-0 flex-1 overflow-x-auto p-[14px]">
       <!-- 좌: 채팅방 (가변폭) -->
       <div class="min-h-0 flex-shrink-0" :style="{ width: leftW + 'px' }">
         <ConversationList />

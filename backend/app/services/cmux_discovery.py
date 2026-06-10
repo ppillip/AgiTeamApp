@@ -43,7 +43,7 @@ ROLE_TOKEN_MAP: dict[str, str] = {
 }
 
 _WS_RE = re.compile(r'workspace\s+(\S+)\s+"([^"]+)"')
-_SURFACE_RE = re.compile(r'surface\s+(\S+)\s+\[[^\]]*\]\s+"([^"]+)".*?(?:\stty=(\S+))?$')
+_SURFACE_RE = re.compile(r'surface\s+(\S+)\s+\[([^\]]*)\]\s+"([^"]+)".*?(?:\stty=(\S+))?$')
 _TITLE_RE = re.compile(r"^(.*?)\s*\(([^)]+)\)\s*$")
 
 
@@ -110,8 +110,14 @@ def parse_tree(text: str, metadata: dict[str, dict] | None = None) -> list[Disco
         sf = _SURFACE_RE.search(line)
         if sf and current_proj is not None:
             surface_id = sf.group(1)
+            bracket = sf.group(2)
+            # QI-WG-021/023: terminal surface 만 role 에 연결한다. panel/split/output 등
+            # non-terminal surface 는 cmux read-screen/send 에서 "Surface is not a terminal"
+            # 오류를 내고 PM bridge 송신이 409 로 막히므로, discovery 단계에서 제외한다.
+            if "terminal" not in bracket:
+                continue
             meta = metadata.get(surface_id, {})
-            parsed = parse_title(sf.group(2))
+            parsed = parse_title(sf.group(3))
             if parsed is None:
                 continue
             display_name, role = parsed
@@ -133,7 +139,7 @@ def parse_tree(text: str, metadata: dict[str, dict] | None = None) -> list[Disco
                     surface_id,
                     display_name,
                     workspace_id=current_ws_id or "",
-                    tty=sf.group(3),
+                    tty=sf.group(4),
                     workspace_project_id=current_proj,
                     team_session_id=meta.get("team_session_id"),
                     agent_id=meta.get("agent_id"),

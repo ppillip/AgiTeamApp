@@ -75,7 +75,7 @@ async def test_broadcast_message_carries_client_message_id(sessionmaker, monkeyp
 
     captured: list[dict] = []
 
-    async def _capture(room_id, payload):
+    async def _capture(room_id, payload, project_id=None):
         captured.append(payload)
 
     monkeypatch.setattr(events_mod.hub, "publish", _capture)

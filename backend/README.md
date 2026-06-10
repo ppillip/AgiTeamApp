@@ -88,9 +88,18 @@ cp .env.example .env        # 필요 시 값 수정
 # (DB 사용 시) PostgreSQL 준비 후 스키마 적용
 psql "$WEBGUI_DATABASE_URL" -f migrations/0001_init.sql
 
-# 서버 기동
-PYTHONPATH=. uvicorn app.main:app --host 127.0.0.1 --port 8731
+# 서버 기동. 기본은 localhost 전용이다.
+PYTHONPATH=. uvicorn app.main:app --host "${WEBGUI_HOST:-127.0.0.1}" --port "${WEBGUI_PORT:-8731}"
 # 문서: http://127.0.0.1:8731/docs
+```
+
+IP 접근 공개가 필요하면 host와 CORS를 함께 명시한다.
+
+```bash
+WEBGUI_HOST=0.0.0.0
+WEBGUI_PORT=8000
+WEBGUI_CORS_ALLOW_ORIGINS="http://localhost:1420,http://127.0.0.1:1420,http://<host-ip>:1420"
+PYTHONPATH=. uvicorn app.main:app --host "$WEBGUI_HOST" --port "$WEBGUI_PORT" --log-level info
 ```
 
 ## 로컬 8000 백엔드 구동 절차
@@ -113,7 +122,7 @@ launchctl bootout gui/$(id -u)/com.panthea.agiteamapp.backend 2>/dev/null || tru
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 kill <PID>
 
-# cmux 전용 backend workspace에서 상주 기동한다.
+# cmux 전용 backend workspace에서 상주 기동한다. 기본은 localhost 전용이다.
 cmux workspace create \
   --name AgiTeamApp-Backend \
   --cwd /Users/ppillip/Projects/Panthea/system/AgiTeamApp/backend \
@@ -127,6 +136,23 @@ curl -sS http://127.0.0.1:8000/openapi.json \
 ```
 
 로그는 `AgiTeamApp-Backend` workspace의 uvicorn surface에서 확인한다.
+
+같은 네트워크에서 `http://<host-ip>:1420/`으로 접속해야 할 때는 기존 workspace를 임의로 죽이지 말고, PM/운영자가 지정한 재기동 창에서 같은 cmux workspace 안에서 다음 형태로 기동한다.
+
+```bash
+export WEBGUI_HOST=0.0.0.0
+export WEBGUI_PORT=8000
+export WEBGUI_CORS_ALLOW_ORIGINS="http://localhost:1420,http://127.0.0.1:1420,http://<host-ip>:1420"
+PYTHONPATH=. ./.venv/bin/uvicorn app.main:app --host "$WEBGUI_HOST" --port "$WEBGUI_PORT" --log-level info
+```
+
+프론트엔드는 `AgiTeamApp-Frontend` cmux workspace에서 다음 형태로 기동한다.
+
+```bash
+VITE_HOST=0.0.0.0 VITE_API_PROXY=http://127.0.0.1:8000 pnpm exec vite --host 0.0.0.0 --port 1420
+```
+
+`VITE_API_BASE` 또는 `VITE_WS_BASE`로 백엔드에 직접 연결하는 경우에는 `localhost`가 아니라 브라우저에서 접근 가능한 `http://<host-ip>:8000` 또는 `ws://<host-ip>:8000`을 사용한다. 기본 동일 출처 `/api` 프록시 방식은 IP 접속에서도 프론트 dev server가 `VITE_API_PROXY`로 백엔드에 대신 연결한다.
 
 ## 테스트
 

@@ -80,10 +80,13 @@ async def test_message_dict_provenance_and_team_session(sessionmaker):
     rid = await _seed(sessionmaker, 1)
     async with sessionmaker() as db:
         rows = await repo.list_messages(db, rid, limit=20, direction="desc")
-    d = message_to_dict(rows[0], runtime_state="live")
+    d = message_to_dict(rows[0], runtime_state="live", project_id="HookTest")
     assert d["team_session_id"] == "boot_1"
-    assert d["provenance"]["source"] == "transcript"
+    assert d["project_id"] == "HookTest"               # QI-WG-029: DS-40 §8 공개키
+    # QI-WG-029: provenance 는 DS-40 §6 형태(origin/runtime_state/is_real_data/is_mock)
+    assert d["provenance"]["origin"] == "transcript"
     assert d["provenance"]["is_real_data"] is True
+    assert d["provenance"]["is_mock"] is False
     assert d["provenance"]["runtime_state"] == "live"
 
 
@@ -118,10 +121,18 @@ async def test_ws_payload_is_json_serializable(sessionmaker):
 
 
 def test_provenance_kinds():
-    assert provenance_dict("hook")["kind"] == "real"
+    # QI-WG-029: DS-40 §6 형태 — origin/runtime_state/is_real_data/is_mock/transport
+    assert provenance_dict("hook")["origin"] == "hook"
+    assert provenance_dict("hook")["is_real_data"] is True
     assert provenance_dict("transcript")["is_real_data"] is True
-    assert provenance_dict("webgui")["kind"] == "manual"
-    assert provenance_dict("webgui")["is_real_data"] is False
-    # mock/unknown source → runtime_state mock 강제
+    # webgui(사용자 실제 입력)도 실데이터 (DS-40 §6: "...webgui...면 true")
+    assert provenance_dict("webgui")["is_real_data"] is True
+    assert provenance_dict("webgui")["is_mock"] is False
+    # mock/None source → is_mock True + runtime_state mock 강제
     assert provenance_dict("mock")["runtime_state"] == "mock"
+    assert provenance_dict("mock")["is_mock"] is True
+    assert provenance_dict(None)["is_mock"] is True
     assert provenance_dict("transcript", runtime_state="disconnected")["runtime_state"] == "disconnected"
+    # transport 선택 필드
+    assert provenance_dict("pm_bridge", transport="rest")["transport"] == "rest"
+    assert "transport" not in provenance_dict("hook")

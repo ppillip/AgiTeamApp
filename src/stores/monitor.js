@@ -135,7 +135,14 @@ function handleWsEvent(ev) {
   const data = env.data && typeof env.data === "object" ? env.data : env;
   const type = env.type || env.event_type || env.update_type || data.update_type || data.type;
   if (!type) return;
+  // project_discovered 는 전역(새 프로젝트 발견) — 스코프 가드 예외(필터 전에 처리).
   if (type === "project_discovered") return upsertProjectEvent(data.project || data);
+  // QI-WG-030(FE측 정합): project 스코프 가드(이중 방어). WS 는 project_id 단위로 열지만,
+  // 이벤트에 project_id 가 실려 있고 현재 선택 프로젝트와 다르면 무시한다(프로젝트 전환 직후
+  // 잔여 이벤트·혼선 방어). project_id 미동봉 이벤트는 room_id 기반 암묵 필터로 흡수(하위 함수).
+  const evProjectId =
+    env.project_id ?? data.project_id ?? (data.room && data.room.project_id) ?? null;
+  if (evProjectId && store.selectedProjectId && evProjectId !== store.selectedProjectId) return;
   if (type === "room_upserted") return upsertRoomEvent(data.room || data);
   if (type === "room_connection_changed") return applyRoomConnection(data.room || data);
   // message 계열: update envelope({update_type,room_id,message}) 형태로 정규화 후 머지
@@ -208,7 +215,8 @@ function startPolling(projectId) {
     const rid = store.selectedRoomId;
     if (!rid) return;
     try {
-      const { updates, next_cursor } = await api.fetchUpdates(rid, pollCursor);
+      // A-F1: project_id 를 함께 전달(BE 필수화). 활성 프로젝트 컨텍스트 기준.
+      const { updates, next_cursor } = await api.fetchUpdates(rid, pollCursor, store.selectedProjectId);
       if (next_cursor) pollCursor = next_cursor;
       applyUpdates(updates);
     } catch {
@@ -251,6 +259,11 @@ function scheduleReconnect(projectId) {
 
 // 프로젝트 단위 WebSocket 연결(room_id 없이 프로젝트 전역 이벤트 구독).
 // onopen: backoff 리셋 + 폴링 중지(WS 우선). onclose(비정상): 즉시 폴백 + 재연결 예약.
+//
+// QI-WG-030 gap replay: 재연결 동안의 누락분은 onclose→startPolling 의 cursor 폴백이 메우고,
+// applyUpdates 가 message_id 로 dedup 하여 중복 말풍선을 막는다(무손실). WS 자체 after replay 는
+// messageStreamUrl(projectId, roomId, after) 슬롯이 준비돼 있으나, BE message-stream 의 after
+// replay 계약(after 의미=cursor/occurred_at)이 확정되면 connectWs(projectId, after) 로 적용한다.
 function connectWs(projectId) {
   try {
     const url = api.messageStreamUrl(projectId);

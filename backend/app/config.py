@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     api_token: str | None = None
     collector_token: str | None = None
 
+    # CORS. 기본은 localhost dev 서버만 허용한다. IP 접근 공개 구동 시
+    # WEBGUI_CORS_ALLOW_ORIGINS 또는 WEBGUI_CORS_ALLOW_ORIGIN_REGEX 로 명시 확장한다.
+    cors_allow_origins: str = "http://localhost:1420,http://127.0.0.1:1420"
+    cors_allow_origin_regex: str | None = None
+
     # cmux 연동 (DS-60 §5.3). PATH 의존 금지 — 절대경로 기본값 (제우스 2026-06-07).
     cmux_bin: str = "/Applications/cmux.app/Contents/Resources/bin/cmux"
     cmux_timeout_seconds: float = 15.0
@@ -82,6 +87,10 @@ class Settings(BaseSettings):
     @property
     def collector_auth_required(self) -> bool:
         return self.collector_token is not None
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
 
     @property
     def artifacts_root_resolved(self) -> Path:
