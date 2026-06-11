@@ -13,6 +13,21 @@ export function parentOf(path) {
   return i < 0 ? "" : path.slice(0, i);
 }
 
+// UI-10 폴더 전파(요구사항 17-2): 폴더 하위(조상 체인)에 '미열람 변경' 파일이 하나라도
+// 있는지 판정한다. externalChanges 는 변경 파일 path 들의 단일 진실원천({path:true})이며,
+// 폴더의 amber 상태는 이 prefix 매칭으로 파생한다(별도 조상 카운터 불필요).
+//   - 파일 열람으로 한 건이 제거돼도 형제 변경이 남아 있으면 true 유지 → 폴더 amber 유지
+//   - 마지막 한 건까지 사라지면 false → 폴더 자동 원복
+// folderPath 가 빈 값(루트)이면 false(루트 노드는 트리에 직접 렌더되지 않음).
+export function folderHasUnseenChange(externalChanges, folderPath) {
+  if (!externalChanges || !folderPath) return false;
+  const prefix = folderPath + "/";
+  for (const p in externalChanges) {
+    if (externalChanges[p] && p.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 // 변경 1건을 받아 "무엇을 해야 하는지" 계획만 반환(실행은 store 가 담당).
 //
 // data: artifact_changed 의 data 모델 { project_id, change_type|kind, path, parent_path, node_type, ... }

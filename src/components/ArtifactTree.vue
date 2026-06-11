@@ -1,6 +1,7 @@
 <script>
 import Icon from "./Icon.vue";
 import { store, toggleFolder, childrenOf, openFile } from "../stores/monitor.js";
+import { folderHasUnseenChange } from "../stores/artifactChange.js";
 
 // 산출물 트리 노드 (S-04, WG-ART-01) — 재귀 컴포넌트.
 //  - 폴더: 클릭 → 펼침/접힘(lazy 로드). 파일: 클릭 → 뷰어(S-05) 로드.
@@ -26,6 +27,20 @@ export default {
     selected() {
       return store.viewer.path === this.node.path;
     },
+    // 외부 수정 표식(WG-ART-06): artifact_watcher 가 감지한 외부 변경 '파일' → 파일명 amber 강조.
+    // 파일을 열면(openFile) 해제된다.
+    externallyChanged() {
+      return !this.node.isDir && !!store.externalChanges[this.node.path];
+    },
+    // UI-10 폴더 전파(요구사항 17-2): 폴더 하위에 미열람 변경이 있으면 폴더명도 amber.
+    // 접힌 폴더 안의 변경도 펼치지 않고 인지 가능. 형제 변경이 남아 있으면 유지, 다 열람되면 원복.
+    folderHasUnseen() {
+      return this.node.isDir && folderHasUnseenChange(store.externalChanges, this.node.path);
+    },
+    // 파일/폴더 공통 미열람 강조 여부(파일=자신 변경, 폴더=하위 변경 전파)
+    markUnseen() {
+      return this.node.isDir ? this.folderHasUnseen : this.externallyChanged;
+    },
   },
   methods: {
     onClick() {
@@ -49,16 +64,27 @@ export default {
     >
       <template v-if="node.isDir">
         <Icon :name="isOpen ? 'chevronDown' : 'chevronRight'" :size="14" class="flex-shrink-0 text-ink-500" />
-        <Icon name="folder" :size="15" class="flex-shrink-0" :class="selected ? 'text-amber' : 'text-ink-300'" />
+        <Icon name="folder" :size="15" class="flex-shrink-0" :class="selected || markUnseen ? 'text-amber' : 'text-ink-300'" />
       </template>
       <template v-else>
         <span class="w-3.5 flex-shrink-0"></span>
-        <Icon name="file" :size="15" class="flex-shrink-0" :class="selected ? 'text-amber' : 'text-ink-300'" />
+        <Icon name="file" :size="15" class="flex-shrink-0" :class="selected || markUnseen ? 'text-amber' : 'text-ink-300'" />
       </template>
-      <span class="truncate">{{ node.name }}</span>
+      <span
+        class="truncate"
+        :class="markUnseen && !selected ? 'font-semibold text-amber-600' : ''"
+      >{{ node.name }}</span>
+      <!-- 미열람 변경 표식 점(amber). 파일=자신 변경 / 폴더=하위 변경 전파(UI-10).
+           후행 그룹(점+배지)을 우측으로 미는 ml-auto 담당. -->
+      <span
+        v-if="markUnseen"
+        class="ml-auto h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber"
+        :title="node.isDir ? '하위에 미열람 변경이 있습니다 — 펼쳐서 확인하세요' : '외부에서 수정됨 — 열어서 확인하세요'"
+      ></span>
       <span
         v-if="!node.isDir && node.ext"
-        class="ml-auto flex-shrink-0 rounded bg-line-soft px-1.5 py-px text-[9.5px] font-bold text-ink-500"
+        class="flex-shrink-0 rounded bg-line-soft px-1.5 py-px text-[9.5px] font-bold text-ink-500"
+        :class="markUnseen ? 'ml-1.5' : 'ml-auto'"
       >{{ extBadge(node.ext) }}</span>
     </button>
 

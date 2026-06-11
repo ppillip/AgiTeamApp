@@ -70,6 +70,11 @@ export const store = reactive({
 
   // 뷰어
   viewer: { open: false, loading: false, path: null, file: null, error: null },
+
+  // 외부 수정 표식 (WG-ART-06, DV-72): artifact_watcher 가 감지한 '외부' 변경 파일 path 집합.
+  //   트리에서 해당 파일명을 amber 로 강조하고, 파일을 열면(openFile) 해제한다.
+  //   자기 저장(saveArtifact)으로 인한 watcher echo 는 강조 대상에서 제외한다.
+  externalChanges: {}, // path -> true
 });
 
 // ── 파생 getter (computed 대용 함수) ─────────────────────────
@@ -473,6 +478,35 @@ export async function loadRoomPreviews(limit = 6, { silent = false } = {}) {
 // ── 산출물 실시간 갱신 (DV-71, DS-40 §10.3/§10.4, DS-60 §8.4) ──────────
 // artifact_changed(WS) 또는 WG-ART-04 polling 의 변경 1건을 화면에 반영한다.
 // 매핑 "결정"은 순수 모듈 planArtifactChange 가, 실제 부수효과(REST 재요청·상태 갱신)는 여기서 담당.
+// 자기 저장(saveArtifact) echo 억제: 우리가 방금 쓴 파일은 watcher 가 곧 modified 로 알려오는데,
+// 이는 '외부' 변경이 아니므로 트리 강조 대상에서 뺀다. 저장 직전 path 를 잠깐(TTL) 등록해 두고
+// 그 사이 들어온 같은 path 의 변경은 강조하지 않는다.
+const SELF_WRITE_TTL = 10000; // ms — watcher 디바운스 + 네트워크 지연 여유
+const recentSelfWrites = new Map(); // path -> timeoutId
+function noteSelfWrite(path) {
+  if (!path) return;
+  const prev = recentSelfWrites.get(path);
+  if (prev) clearTimeout(prev);
+  recentSelfWrites.set(
+    path,
+    setTimeout(() => recentSelfWrites.delete(path), SELF_WRITE_TTL)
+  );
+}
+function isSelfWrite(path) {
+  return recentSelfWrites.has(path);
+}
+
+// 외부 변경 표식 추가/해제 (WG-ART-06). 자기 저장 echo·현재 보고 있는 파일은 강조하지 않는다.
+function markExternalChange(path) {
+  if (!path) return;
+  if (isSelfWrite(path)) return; // 자기 저장 echo → 외부 변경 아님
+  if (store.viewer.open && store.viewer.path === path) return; // 보고 있는 파일 → 자동 reload 로 충분
+  store.externalChanges[path] = true;
+}
+export function clearExternalChange(path) {
+  if (path && store.externalChanges[path]) delete store.externalChanges[path];
+}
+
 function applyArtifactChange(data) {
   if (store.degraded) return;
   const plan = planArtifactChange(data, {
@@ -482,6 +516,12 @@ function applyArtifactChange(data) {
     expanded: store.expanded,
   });
   if (plan.ignore) return;
+
+  // 0) 외부 수정 표식(WG-ART-06): created/modified 는 트리에서 파일명 강조 대상.
+  //    deleted 는 노드 자체가 사라지므로 강조 불필요.
+  if (plan.changeType === "modified" || plan.changeType === "created") {
+    markExternalChange(plan.path);
+  }
 
   // 1) 현재 뷰어 중인 파일 변경 반영
   if (plan.viewer === "deleted") {
@@ -631,6 +671,7 @@ export async function selectProject(projectId) {
   store.treeRoot = null;
   store.expanded = {};
   store.childrenCache = {};
+  store.externalChanges = {}; // 외부 수정 표식 초기화(이전 프로젝트 컨텍스트)
   closeViewer();
 
   if (store.degraded) {
@@ -1001,6 +1042,8 @@ export function childrenOf(node) {
 
 // ── 뷰어 ────────────────────────────────────────────────────
 export async function openFile(node) {
+  // 파일을 여는 순간 외부 수정 표식 해제(WG-ART-06: '열어서 보는 순간 색상 원복')
+  clearExternalChange(node.path);
   store.viewer.open = true;
   store.viewer.loading = true;
   store.viewer.error = null;
@@ -1035,6 +1078,26 @@ export function closeViewer() {
   store.viewer.file = null;
   store.viewer.error = null;
   store.viewer.path = null;
+}
+
+// ── 산출물 파일 쓰기 (MD 에디터 저장, WG-ART-05) ───────────────
+// 백엔드 /artifacts/write 호출 → 저장 성공 시 현재 뷰어 파일 내용을 최신화(낙관적).
+// 자기 저장은 watcher echo 로 외부 수정 강조되지 않게 noteSelfWrite 로 미리 등록한다.
+export async function saveArtifact(path, content) {
+  if (!path) return null;
+  if (store.degraded) {
+    throw new ApiError("오프라인 상태에서는 저장할 수 없습니다.", { code: "offline_save" });
+  }
+  const pid = store.selectedProjectId;
+  noteSelfWrite(path); // 저장 직전 등록(이후 watcher 의 같은 path 변경은 외부 강조 제외)
+  const { file } = await api.writeFile(path, content, { projectId: pid });
+  // 저장 성공 → 현재 뷰어 파일 즉시 최신화. 서버가 파일 메타를 주면 그것으로, 아니면 content 만 반영.
+  if (store.viewer.open && store.viewer.path === path && store.selectedProjectId === pid) {
+    if (file) store.viewer.file = file;
+    else if (store.viewer.file) store.viewer.file = { ...store.viewer.file, content };
+  }
+  clearExternalChange(path); // 자기 저장본은 외부 변경 아님 → 표식 해제
+  return file;
 }
 
 export function teardown() {

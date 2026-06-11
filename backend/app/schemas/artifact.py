@@ -33,4 +33,9 @@ class ArtifactFile(BaseModel):
     render_warnings: list[str] = []
 
 
+class ArtifactWriteRequest(BaseModel):
+    path: str
+    content: str
+
+
 ArtifactNode.model_rebuild()

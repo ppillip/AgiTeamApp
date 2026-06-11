@@ -20,7 +20,7 @@ import {
   provenanceInfo,
   connectionInfo,
 } from "../src/api/adapters.js";
-import { parentOf, planArtifactChange } from "../src/stores/artifactChange.js";
+import { parentOf, planArtifactChange, folderHasUnseenChange } from "../src/stores/artifactChange.js";
 import { adaptAttachment } from "../src/api/adapters.js";
 import {
   isAllowedImageType,
@@ -309,6 +309,29 @@ ok(planArtifactChange({ project_id: "Panthea", change_type: "modified" }, VIEW()
     VIEW({ expanded: { "docs/sub": true } })
   );
   ok(p.parent === "docs/sub" && p.refreshDir === "docs/sub", "art: parent_path 누락 → path 에서 유도");
+}
+
+// ── UI-10 폴더 전파(요구사항 17-2): folderHasUnseenChange ──────────
+{
+  const ec = { "documents/products/a.md": true, "documents/x.md": true };
+  // 직속/조상 폴더 모두 하위 변경을 감지(조상 체인 전파)
+  ok(folderHasUnseenChange(ec, "documents") === true, "ui10: 조상 폴더 전파(documents)");
+  ok(folderHasUnseenChange(ec, "documents/products") === true, "ui10: 직속 폴더 감지");
+  // 변경 없는 형제 폴더는 false
+  ok(folderHasUnseenChange(ec, "documents/other") === false, "ui10: 무변경 폴더 false");
+  // prefix 오탐 방지: 'doc' 는 'documents/...' 의 접두지만 폴더 경계(/)가 아니므로 false
+  ok(folderHasUnseenChange(ec, "doc") === false, "ui10: 경계 없는 prefix 오탐 방지");
+  // 루트(빈 경로)·널 입력 방어
+  ok(folderHasUnseenChange(ec, "") === false, "ui10: 루트(빈 경로) false");
+  ok(folderHasUnseenChange(null, "documents") === false, "ui10: null 맵 방어");
+  // 형제 잔존 시 유지 / 마지막 열람 시 원복(요구사항 핵심) — 객체 변형으로 시뮬레이션
+  const ec2 = { "d/sub/a.md": true, "d/sub/b.md": true };
+  delete ec2["d/sub/a.md"]; // a 열람
+  ok(folderHasUnseenChange(ec2, "d") === true, "ui10: 형제 잔존 → 폴더 유지");
+  delete ec2["d/sub/b.md"]; // b 열람(마지막)
+  ok(folderHasUnseenChange(ec2, "d") === false, "ui10: 마지막 열람 → 폴더 원복");
+  // false 값(명시적으로 false 인 키)은 무시
+  ok(folderHasUnseenChange({ "d/c.md": false }, "d") === false, "ui10: false 값 키 무시");
 }
 
 // ── 이미지 첨부 검증 (DV-91, DS-40 §7.6.3 / DS-60 §5.4.2) ──────────

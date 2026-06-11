@@ -409,6 +409,35 @@ class ArtifactService:
         base["render_warnings"] = ["conversion_pending"]
         return {"file": base, "status": 202, "conversion": {"status": "pending", "timeout_seconds": 30}}
 
+    # --- 파일 쓰기 (WG-ART-05) --------------------------------------------
+
+    def write_file(self, raw_path: str, content: str) -> dict:
+        """산출물 .md 파일 저장.
+
+        보안: resolve() 가 allowlist 루트 밖 접근(traversal/절대경로/symlink-escape/
+        secret/hidden)을 차단한다(GET 계열과 동일 경계). .md/.markdown 만 허용한다.
+
+        - 경로 위반 → WebguiError(path_forbidden 403 등, resolve() 가 raise)
+        - .md 아님 → invalid_artifact_type(400)
+        - 대상이 디렉토리 → not_file(422)
+        - 쓰기 실패 → artifact_write_failed(500)
+        성공 시 {"saved": True, "path": <rel>} 반환.
+        """
+        rp = self.resolve(raw_path)
+        ext = _ext(rp.abs_path.name)
+        if ext not in ("md", "markdown"):
+            raise errors.invalid_artifact_type(detected=ext)
+        # 기존 경로가 디렉토리면 덮어쓰기 금지
+        if rp.abs_path.exists() and rp.abs_path.is_dir():
+            raise errors.not_file()
+        try:
+            # 신규 산출물 작성 시 부모 디렉토리 보장 (루트 내부로 검증 완료된 경로).
+            rp.abs_path.parent.mkdir(parents=True, exist_ok=True)
+            rp.abs_path.write_text(content, encoding="utf-8")
+        except OSError:
+            raise errors.artifact_write_failed()
+        return {"saved": True, "path": rp.rel_path}
+
     def open_stream(self, raw_path: str, *, max_stream_bytes: int = 52_428_800) -> tuple[Path, str, int]:
         """PDF 등 원본 stream 용 검증된 경로 반환 (WG-ART-03)."""
         rp = self.resolve(raw_path)

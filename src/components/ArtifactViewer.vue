@@ -1,6 +1,6 @@
 <script>
 import Icon from "./Icon.vue";
-import { store, closeViewer } from "../stores/monitor.js";
+import { store, closeViewer, saveArtifact } from "../stores/monitor.js";
 import { fileStreamUrl } from "../api/index.js";
 import { renderMarkdown } from "../lib/markdown.js";
 
@@ -19,6 +19,21 @@ function loadMermaid() {
 }
 let _mermaidSeq = 0; // SVG id 충돌 방지용 단조 증가 시드
 
+// Milkdown Crepe(WYSIWYG 마크다운 에디터) 동적 로드 — [수정] 탭을 처음 열 때만 로드.
+// mermaid 와 같은 패턴으로 초기 번들에서 분리한다(에디터·테마 CSS 포함, ~수백 kB).
+// 옵시디언처럼 '렌더된 채로 그 자리 편집' + 마크다운 1급 입출력(getMarkdown).
+let _crepePromise = null;
+function loadCrepe() {
+  if (!_crepePromise) {
+    _crepePromise = Promise.all([
+      import("@milkdown/crepe"),
+      import("@milkdown/crepe/theme/common/style.css"),
+      import("@milkdown/crepe/theme/frame.css"),
+    ]).then(([m]) => m.Crepe);
+  }
+  return _crepePromise;
+}
+
 // 산출물 뷰어 (S-05) — render_mode 별 분기(불칸 계약):
 //   markdown      → 경량 MD 렌더(무의존, XSS 안전)
 //   pdf_stream    → stream_url iframe 임베드
@@ -34,7 +49,20 @@ export default {
   props: { big: { type: Boolean, default: false } },
   emits: ["expand", "collapse"],
   data() {
-    return { htmlMode: "render" }; // render | source
+    return {
+      htmlMode: "render", // html: render | source
+      // 마크다운 에디터(옵시디언식 WYSIWYG): render(렌더) | edit(수정)
+      mdTab: "render",
+      saving: false,
+      saveError: null,
+      editorLoading: false, // Crepe 동적 로드/마운트 중
+      dirtyFlag: false, // 에디터 내용이 마운트 시점 대비 변경됨(저장 버튼 활성 조건)
+    };
+    // 비반응 인스턴스 필드(아래 created 에서 초기화): this.crepe, this.editorBase
+  },
+  created() {
+    this.crepe = null; // Crepe 인스턴스(반응형 래핑 회피 — ProseMirror 보호)
+    this.editorBase = ""; // 마운트 직후 정규화된 마크다운(dirty 비교 기준)
   },
   computed: {
     store: () => store,
@@ -53,6 +81,20 @@ export default {
     },
     mdHtml() {
       return this.mode === "markdown" && this.file?.content != null ? renderMarkdown(this.file.content) : "";
+    },
+    isMarkdown() {
+      return this.mode === "markdown";
+    },
+    // 수정 기준 원문(현재 저장본). edit 진입 시 에디터 초기값.
+    mdBase() {
+      return this.file?.content ?? "";
+    },
+    // 변경 여부(저장 버튼 활성 조건). WYSIWYG 에디터의 markdownUpdated 가 dirtyFlag 를 갱신.
+    dirty() {
+      return this.mdTab === "edit" && this.dirtyFlag;
+    },
+    canSave() {
+      return this.dirty && !this.saving && !this.editorLoading && !store.degraded;
     },
     // pdf/html/image 공용 스트림 URL. 백엔드 stream_url 은 project_id 가 빠져 있어
     // 선택 프로젝트 기준으로 항상 직접 구성(project_id 포함)한다.
@@ -75,9 +117,12 @@ export default {
     },
   },
   watch: {
-    // 파일이 바뀌면 html 토글을 렌더로 초기화
+    // 파일이 바뀌면 html 토글·md 에디터 상태를 렌더로 초기화(열려 있던 에디터는 언마운트)
     "store.viewer.path"() {
       this.htmlMode = "render";
+      this.unmountEditor(); // 이전 파일 에디터 폐기(있으면)
+      this.mdTab = "render";
+      this.saveError = null;
     },
     // md 렌더 결과가 바뀌면 mermaid 다이어그램 변환(파일 전환·내용 갱신 포함)
     mdHtml() {
@@ -86,9 +131,104 @@ export default {
   },
   mounted() {
     this.renderMermaid();
+    // Ctrl/Cmd+S 저장 단축키(수정 모드일 때만 가로채 저장)
+    window.addEventListener("keydown", this.onKeydown);
+  },
+  beforeUnmount() {
+    window.removeEventListener("keydown", this.onKeydown);
+    this.unmountEditor();
   },
   methods: {
     closeViewer,
+    // 렌더↔수정 탭 전환. 수정 진입 시 WYSIWYG 에디터 로드, 렌더 복귀 시 언마운트(요구사항).
+    setMdTab(tab) {
+      if (tab === this.mdTab) return;
+      this.saveError = null;
+      if (tab === "edit") {
+        this.mdTab = "edit";
+        this.$nextTick(() => this.mountEditor());
+      } else {
+        this.unmountEditor(); // [렌더] 전환 → 에디터 언마운트
+        this.mdTab = "render";
+      }
+    },
+    // Crepe(WYSIWYG) 마운트: 현재 저장본을 렌더된 상태로 띄우고, 그 자리에서 편집 가능.
+    //   markdownUpdated 리스너로 dirty 추적(정규화된 초기값 editorBase 와 비교 → 오탐 방지).
+    async mountEditor() {
+      const host = this.$refs.mdEditor;
+      if (!host || this.crepe) return;
+      this.editorLoading = true;
+      this.dirtyFlag = false;
+      const path = this.file?.path;
+      try {
+        const Crepe = await loadCrepe();
+        // 로드 중 파일 전환·탭 이탈 시 폐기(레이스 방어)
+        if (this.mdTab !== "edit" || this.file?.path !== path || !this.$refs.mdEditor) {
+          this.editorLoading = false;
+          return;
+        }
+        const crepe = new Crepe({ root: this.$refs.mdEditor, defaultValue: this.mdBase });
+        crepe.on((listener) => {
+          listener.markdownUpdated((_ctx, markdown) => {
+            // 정규화된 초기값과 다를 때만 dirty(왕복 정규화로 인한 오탐 차단)
+            this.dirtyFlag = markdown !== this.editorBase;
+          });
+        });
+        await crepe.create();
+        // create 중 파일 전환·탭 이탈했으면 즉시 폐기(스테일 인스턴스 누수 방지)
+        if (this.mdTab !== "edit" || this.file?.path !== path) {
+          try { crepe.destroy(); } catch {}
+          this.editorLoading = false;
+          return;
+        }
+        // 마운트 직후 정규화된 마크다운을 dirty 비교 기준으로 고정
+        this.editorBase = crepe.getMarkdown();
+        this.crepe = crepe;
+      } catch (e) {
+        this.saveError = "에디터를 불러오지 못했습니다.";
+        this.mdTab = "render";
+      } finally {
+        this.editorLoading = false;
+      }
+    },
+    // Crepe 언마운트(에디터 정리). 비동기 destroy 는 호스트 DOM(v-show)이 유지되므로 안전.
+    unmountEditor() {
+      const inst = this.crepe;
+      this.crepe = null;
+      this.dirtyFlag = false;
+      this.editorBase = "";
+      if (inst) {
+        try {
+          inst.destroy();
+        } catch {}
+      }
+    },
+    // 저장: 에디터의 현재 마크다운을 백엔드에 기록(store.saveArtifact) → 성공 시 렌더 탭 자동 전환.
+    async save() {
+      if (!this.file || this.saving) return;
+      const md = this.crepe ? this.crepe.getMarkdown() : null;
+      if (md == null) return;
+      this.saving = true;
+      this.saveError = null;
+      try {
+        await saveArtifact(this.file.path, md);
+        this.unmountEditor(); // 저장 후 에디터 정리
+        this.mdTab = "render"; // 저장 성공 → 렌더 탭 자동 전환(요구사항)
+      } catch (e) {
+        this.saveError = e?.message || "저장에 실패했습니다.";
+      } finally {
+        this.saving = false;
+      }
+    },
+    // Ctrl+S / Cmd+S — 마크다운 수정 모드에서만 가로채 저장(그 외엔 브라우저 기본 동작 유지)
+    onKeydown(e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+        if (this.isMarkdown && this.mdTab === "edit") {
+          e.preventDefault();
+          if (this.canSave) this.save();
+        }
+      }
+    },
     // md 본문 내 .mermaid-block 들을 SVG 다이어그램으로 변환. 실패한 블록은 코드블록으로 폴백.
     async renderMermaid() {
       await this.$nextTick();
@@ -141,6 +281,23 @@ export default {
           <button @click="htmlMode = 'render'" class="rounded-md px-2.5 py-1 text-[11.5px] font-bold" :class="htmlMode === 'render' ? 'bg-amber text-white' : 'text-ink-600'">렌더</button>
           <button @click="htmlMode = 'source'" class="rounded-md px-2.5 py-1 text-[11.5px] font-bold" :class="htmlMode === 'source' ? 'bg-amber text-white' : 'text-ink-600'">소스</button>
         </div>
+        <!-- markdown 렌더/수정 토글 + 저장(수정 모드) — 옵시디언식 .md 원문 편집 -->
+        <template v-if="file && mode === 'markdown'">
+          <div class="inline-flex items-center gap-0.5 rounded-lg border border-line bg-[#F7F7F8] p-0.5">
+            <button @click="setMdTab('render')" class="rounded-md px-2.5 py-1 text-[11.5px] font-bold" :class="mdTab === 'render' ? 'bg-amber text-white' : 'text-ink-600'">렌더</button>
+            <button @click="setMdTab('edit')" class="rounded-md px-2.5 py-1 text-[11.5px] font-bold" :class="mdTab === 'edit' ? 'bg-amber text-white' : 'text-ink-600'">수정</button>
+          </div>
+          <button
+            v-if="mdTab === 'edit'"
+            @click="save"
+            :disabled="!canSave"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition-colors"
+            :class="canSave ? 'bg-amber text-white hover:bg-amber-600' : 'cursor-not-allowed bg-[#F4F4F6] text-ink-400'"
+            title="저장 (Ctrl/Cmd+S)"
+          >
+            <Icon name="check" :size="14" />{{ saving ? "저장 중…" : "저장" }}
+          </button>
+        </template>
         <!-- 큰 뷰: 채팅으로 복귀 / 패널: 크게 + 닫기 -->
         <button v-if="big" @click="$emit('collapse')" class="flex items-center gap-1.5 rounded-lg bg-[#F4F4F6] px-3 py-1.5 text-[12.5px] font-semibold text-ink-600 hover:bg-line-soft" title="채팅으로 돌아가기">
           <Icon name="x" :size="15" />채팅으로
@@ -172,14 +329,46 @@ export default {
       </div>
 
       <template v-else-if="file">
-        <!-- markdown -->
-        <div
-          v-if="mode === 'markdown'"
-          ref="mdBody"
-          class="md-body h-full overflow-y-auto nice-scroll"
-          :class="big ? 'px-10 py-7 lg:px-16' : 'px-[22px] py-5'"
-          v-html="mdHtml"
-        ></div>
+        <!-- markdown: 렌더 / 수정(옵시디언식 .md 원문 편집).
+             렌더 div 는 v-show 로 DOM 에 유지 → mermaid 변환 결과 보존(탭 전환 시 재변환 비용 없음) -->
+        <template v-if="mode === 'markdown'">
+          <div
+            v-show="mdTab === 'render'"
+            ref="mdBody"
+            class="md-body h-full overflow-y-auto nice-scroll"
+            :class="big ? 'px-10 py-7 lg:px-16' : 'px-[22px] py-5'"
+            v-html="mdHtml"
+          ></div>
+          <div v-show="mdTab === 'edit'" class="flex h-full min-h-0 flex-col">
+            <!-- Milkdown Crepe(WYSIWYG) 호스트. 렌더된 채로 클릭해 그 자리 편집.
+                 v-show 로 호스트 DOM 을 유지(비동기 destroy 레이스 방어). -->
+            <div class="relative min-h-0 flex-1 overflow-hidden">
+              <div
+                ref="mdEditor"
+                class="md-wysiwyg h-full overflow-y-auto nice-scroll"
+                :class="big ? 'px-6 py-4 lg:px-10' : 'px-2 py-2'"
+              ></div>
+              <div
+                v-if="editorLoading"
+                class="absolute inset-0 flex items-center justify-center bg-white/70 text-[13px] text-ink-400"
+              >에디터 불러오는 중…</div>
+            </div>
+            <!-- 상태 바: 저장 오류 또는 dirty/단축키 안내 -->
+            <div
+              v-if="saveError"
+              class="flex items-center gap-1.5 border-t border-line-soft bg-[#FCEEEE] px-4 py-2 text-[12px] font-semibold text-red-500"
+            >
+              <Icon name="alert" :size="14" />{{ saveError }}
+            </div>
+            <div
+              v-else
+              class="flex items-center justify-between border-t border-line-soft bg-[#FAFAFB] px-4 py-1.5 text-[11px] text-ink-400"
+            >
+              <span :class="dirty ? 'font-semibold text-amber-600' : ''">{{ dirty ? "● 저장되지 않은 변경" : "변경 없음" }}</span>
+              <span>WYSIWYG · Ctrl/Cmd+S 로 저장</span>
+            </div>
+          </div>
+        </template>
 
         <!-- pdf -->
         <iframe v-else-if="mode === 'pdf_stream' && streamUrl" :src="streamUrl" class="h-full w-full border-0" title="PDF 미리보기"></iframe>
@@ -221,3 +410,22 @@ export default {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Milkdown Crepe(WYSIWYG) 를 모니터 디자인 토큰(Pretendard·앰버 액센트)에 맞춰 정렬.
+   frame 테마의 기본 폰트/회색 액센트를 우리 토큰으로 덮어쓴다. :deep 로 에디터 내부 타깃. */
+.md-wysiwyg :deep(.milkdown) {
+  height: 100%;
+  --crepe-font-default: "Pretendard", system-ui, -apple-system, sans-serif;
+  --crepe-font-title: "Pretendard", system-ui, -apple-system, sans-serif;
+  --crepe-color-primary: #dd6b1f; /* amber DEFAULT */
+  --crepe-color-on-background: #1a1a1e; /* ink-900 */
+  --crepe-color-inline-code: #c2570b; /* amber-600 */
+}
+/* 편집 영역: 컨테이너를 꽉 채우고, 빈 영역 클릭으로도 포커스되도록 최소 높이 확보 */
+.md-wysiwyg :deep(.milkdown .ProseMirror) {
+  min-height: 100%;
+  padding: 4px 6px 48px;
+  outline: none;
+}
+</style>

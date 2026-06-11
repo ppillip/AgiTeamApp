@@ -144,6 +144,16 @@ def invalid_tree_query(msg: str = "Invalid tree query.") -> WebguiError:
     return WebguiError("invalid_tree_query", 422, msg)
 
 
+# 산출물 저장 (WG-ART-05 파일 쓰기). md 만 허용(400), 쓰기 실패(500).
+def invalid_artifact_type(detected: str | None = None) -> WebguiError:
+    d = {"detected_format": detected} if detected else None
+    return WebguiError("invalid_artifact_type", 400, "Only .md artifacts can be saved.", d)
+
+
+def artifact_write_failed() -> WebguiError:
+    return WebguiError("artifact_write_failed", 500, "Failed to write artifact.")
+
+
 # 산출물 변경 polling (WG-ART-04 / DS-40 §20.4)
 def invalid_pagination(msg: str = "Invalid pagination cursor.") -> WebguiError:
     return WebguiError("invalid_pagination", 422, msg)

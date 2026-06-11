@@ -7,3 +7,4 @@ node_modules
 !.env.example
 *.local
 vite.config.js.timestamp-*
+src-tauri/target/

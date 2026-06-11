@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from .. import errors
 from ..config import get_settings
 from ..deps import require_auth
+from ..schemas.artifact import ArtifactWriteRequest
 from ..schemas.common import ok
 from ..services.artifact_service import ArtifactService
 
@@ -80,6 +81,22 @@ async def get_tree(
         max_nodes=settings.max_tree_nodes,
         max_depth=settings.max_tree_depth,
     )
+    return ok(data)
+
+
+@router.post("/write", dependencies=[Depends(require_auth)])
+async def write_artifact(
+    request: Request,
+    body: ArtifactWriteRequest,
+    project_id: str | None = Query(default=None),
+):
+    """WG-ART-05 산출물 .md 저장.
+
+    경로 체계는 GET /tree 와 동일(per-project root 기준 상대경로). 보안은
+    ArtifactService.resolve() 가 GET 계열과 동일하게 적용한다(allowlist+traversal 차단).
+    성공 200 {saved: true, path}, 경로 위반 403, .md 아님 400, 쓰기 실패 500.
+    """
+    data = _svc(request, project_id).write_file(body.path, body.content)
     return ok(data)
 
 

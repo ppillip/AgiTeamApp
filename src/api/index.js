@@ -109,6 +109,18 @@ export async function fetchFile(path, { prefer = "inline", projectId } = {}) {
   return adaptFile(data.file);
 }
 
+// WG-ART-05 — 산출물 파일 쓰기(MD 에디터 저장). 불칸 계약: POST /api/webgui/artifacts/write
+//   body: { project_id, path, content }. 성공 시 저장된 파일 메타(있으면)를 adaptFile 로 정규화해 반환.
+//   백엔드가 file 을 안 돌려줘도 호출부가 낙관적으로 content 를 반영하므로 { file:null } 도 정상.
+export async function writeFile(path, content, { projectId } = {}) {
+  const data = await http.post(`${P}/artifacts/write`, {
+    project_id: projectId || undefined,
+    path,
+    content,
+  });
+  return { file: data?.file ? adaptFile(data.file) : null, raw: data };
+}
+
 // WG-ART-03 — 스트림 URL (pdf iframe/embed 용, 선택 프로젝트 기준)
 export function fileStreamUrl(path, variant = "original", projectId) {
   return apiUrl(`${P}/artifacts/file/stream`, { project_id: projectId || undefined, path, variant });
