@@ -29,8 +29,15 @@ async def send_message(body: SendMessageRequest, response: Response, db: AsyncSe
     settings = get_settings()
     project_id = body.project_id or settings.project_id
     bridge = PMBridge(settings)
+    attachments = (
+        [{"attachment_id": a.attachment_id} for a in body.attachments] if body.attachments else None
+    )
     result = await bridge.send(
-        db, project_id=project_id, text=body.text, client_message_id=body.client_message_id
+        db,
+        project_id=project_id,
+        text=body.text,
+        client_message_id=body.client_message_id,
+        attachments=attachments,
     )
     response.status_code = 201
     return ok(result)

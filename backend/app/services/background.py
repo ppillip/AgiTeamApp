@@ -167,6 +167,32 @@ async def rawlog_loop(collector: LogCollector, settings: Settings) -> None:
         await asyncio.sleep(settings.logtail_poll_seconds)
 
 
+async def attachment_cleanup_loop(settings: Settings, registry: DiscoveryRegistry) -> None:
+    """이미지 첨부 TTL cleanup (DV-90 / DS-40 §7.6.2). 만료 업로드 파일·sidecar 정리.
+
+    감시 대상 프로젝트(registry ∪ project_roots_json ∪ project_id)별 업로드 폴더를 순회한다.
+    파일시스템 작업이므로 DB 미가동에도 동작한다. 실패해도 다음 주기 재시도.
+    """
+    from .attachment_service import AttachmentService, candidate_project_ids
+
+    while True:
+        try:
+            for pid in candidate_project_ids(settings, registry):
+                if not settings.project_exists(pid):
+                    continue
+                svc = AttachmentService(
+                    settings.project_root(pid),
+                    max_bytes=settings.attachment_max_bytes,
+                    ttl_seconds=settings.attachment_ttl_seconds,
+                )
+                removed = svc.cleanup_expired()
+                if removed:
+                    logger.info("attachment cleanup project=%s removed=%d", pid, removed)
+        except Exception:
+            logger.exception("attachment cleanup loop failed")
+        await asyncio.sleep(settings.attachment_cleanup_seconds)
+
+
 class BackgroundManager:
     def __init__(self) -> None:
         self._tasks: list[asyncio.Task] = []
@@ -180,6 +206,7 @@ class BackgroundManager:
         self._tasks.append(asyncio.create_task(discovery_loop(settings, registry, adapter, sessionmaker)))
         self._tasks.append(asyncio.create_task(transcript_loop(transcript, settings)))
         self._tasks.append(asyncio.create_task(rawlog_loop(rawlog, settings)))
+        self._tasks.append(asyncio.create_task(attachment_cleanup_loop(settings, registry)))
 
     async def stop(self) -> None:
         for t in self._tasks:

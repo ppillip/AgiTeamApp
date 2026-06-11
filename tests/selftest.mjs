@@ -20,6 +20,16 @@ import {
   provenanceInfo,
   connectionInfo,
 } from "../src/api/adapters.js";
+import { parentOf, planArtifactChange } from "../src/stores/artifactChange.js";
+import { adaptAttachment } from "../src/api/adapters.js";
+import {
+  isAllowedImageType,
+  validateImageFile,
+  canAddCount,
+  remainingSlots,
+  MAX_ATTACH_BYTES,
+  MAX_ATTACH_COUNT,
+} from "../src/lib/imageAttach.js";
 
 let pass = 0;
 let fail = 0;
@@ -219,6 +229,140 @@ const provRooms = adaptRooms({
   ],
 });
 ok(provRooms[0].runtimeState === "disconnected" && provRooms[0].provSource === "transcript" && provRooms[0].isMock === false, "room: provenance/runtime_state 흡수");
+
+// ── 산출물 실시간 갱신 매핑 (DV-71, DS-40 §10.4 / DS-60 §8.4) ──────────
+// parentOf
+ok(parentOf("04.development/02.설계/DS-40.md") === "04.development/02.설계", "art: parentOf 중첩");
+ok(parentOf("README.md") === "", "art: parentOf 루트직하 → 빈 문자열");
+ok(parentOf("") === "", "art: parentOf 빈 입력");
+
+const VIEW = (over = {}) => ({
+  selectedProjectId: "Panthea",
+  viewerOpen: false,
+  viewerPath: null,
+  expanded: {},
+  ...over,
+});
+
+// 타 프로젝트 이벤트 → 무시(프로젝트 격리)
+ok(
+  planArtifactChange({ project_id: "Other", path: "a/b.md", change_type: "modified", parent_path: "a" }, VIEW()).ignore === true,
+  "art: 타 프로젝트 변경 무시"
+);
+// path 없으면 무시
+ok(planArtifactChange({ project_id: "Panthea", change_type: "modified" }, VIEW()).ignore === true, "art: path 없음 무시");
+
+// 루트 직하 변경 → 루트는 항상 보임 → refreshDir = ""(루트 재요청)
+{
+  const p = planArtifactChange({ project_id: "Panthea", path: "새파일.md", change_type: "created", parent_path: "" }, VIEW());
+  ok(p.refreshDir === "" && p.viewer === null && p.purge === false, "art: 루트 직하 created → 루트 재요청");
+}
+// 펼친 디렉토리 안 변경 → 그 디렉토리만 재요청
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "docs/x.md", change_type: "modified", parent_path: "docs" },
+    VIEW({ expanded: { docs: true } })
+  );
+  ok(p.refreshDir === "docs", "art: 펼친 디렉토리 변경 → 해당 디렉토리 재요청");
+}
+// 펼치지 않은 디렉토리 안 변경 → refreshDir = null(즉시 재요청 안 함, §10.4)
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "docs/x.md", change_type: "modified", parent_path: "docs" },
+    VIEW({ expanded: { docs: false } })
+  );
+  ok(p.refreshDir === null, "art: 미펼침 디렉토리 변경 → 즉시 재요청 안 함");
+}
+// 현재 뷰어 중 파일 modified → viewer reload
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "docs/open.md", change_type: "modified", parent_path: "docs" },
+    VIEW({ viewerOpen: true, viewerPath: "docs/open.md", expanded: { docs: true } })
+  );
+  ok(p.viewer === "reload", "art: 뷰어 중 파일 modified → reload");
+}
+// 현재 뷰어 중 파일 deleted → viewer deleted 안내 + purge
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "docs/open.md", change_type: "deleted", parent_path: "docs" },
+    VIEW({ viewerOpen: true, viewerPath: "docs/open.md", expanded: { docs: true } })
+  );
+  ok(p.viewer === "deleted" && p.purge === true && p.refreshDir === "docs", "art: 뷰어 중 파일 deleted → 안내+정리+디렉토리 재요청");
+}
+// 뷰어와 다른 파일 변경 → 뷰어 영향 없음
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "docs/other.md", change_type: "modified", parent_path: "docs" },
+    VIEW({ viewerOpen: true, viewerPath: "docs/open.md", expanded: { docs: true } })
+  );
+  ok(p.viewer === null, "art: 뷰어와 다른 파일 변경 → 뷰어 무영향");
+}
+// kind 표기 관용 수용(BE change_type 기본, kind 별칭)
+{
+  const p = planArtifactChange({ project_id: "Panthea", path: "a.md", kind: "deleted", parent_path: "" }, VIEW());
+  ok(p.changeType === "deleted" && p.purge === true, "art: kind 별칭 수용");
+}
+// parent_path 누락 시 path 에서 유도
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "docs/sub/y.md", change_type: "modified" },
+    VIEW({ expanded: { "docs/sub": true } })
+  );
+  ok(p.parent === "docs/sub" && p.refreshDir === "docs/sub", "art: parent_path 누락 → path 에서 유도");
+}
+
+// ── 이미지 첨부 검증 (DV-91, DS-40 §7.6.3 / DS-60 §5.4.2) ──────────
+// 형식 판정(MIME 우선, type 없으면 확장자 보조)
+ok(isAllowedImageType({ type: "image/png", name: "a.png", size: 100 }) === true, "img: png 허용");
+ok(isAllowedImageType({ type: "image/jpeg", size: 100 }) === true, "img: jpeg 허용");
+ok(isAllowedImageType({ type: "image/webp", size: 100 }) === true, "img: webp 허용");
+ok(isAllowedImageType({ type: "image/gif", size: 100 }) === true, "img: gif 허용");
+ok(isAllowedImageType({ type: "image/svg+xml", size: 100 }) === false, "img: svg 거부");
+ok(isAllowedImageType({ type: "application/pdf", size: 100 }) === false, "img: pdf 거부");
+ok(isAllowedImageType({ type: "", name: "clip.PNG", size: 100 }) === true, "img: type 없을 때 확장자(PNG) 보조 허용");
+ok(isAllowedImageType({ type: "", name: "noext", size: 100 }) === false, "img: type·확장자 모두 없으면 거부");
+// 용량/형식 검증
+ok(validateImageFile({ type: "image/png", size: 1000 }).ok === true, "img: 정상 파일 통과");
+ok(validateImageFile({ type: "image/png", size: MAX_ATTACH_BYTES + 1 }).code === "too_large", "img: 10MiB 초과 거부");
+ok(validateImageFile({ type: "image/bmp", size: 10 }).code === "unsupported_type", "img: 미지원 형식 거부");
+ok(validateImageFile(null).ok === false, "img: null 파일 거부");
+ok(MAX_ATTACH_BYTES === 10 * 1024 * 1024, "img: 상한 10MiB");
+// 개수 한도
+ok(MAX_ATTACH_COUNT === 5, "img: 메시지당 5개");
+ok(canAddCount(4, 1) === true && canAddCount(5, 1) === false, "img: 개수 한도(5) 판정");
+ok(remainingSlots(2) === 3 && remainingSlots(5) === 0 && remainingSlots(7) === 0, "img: 잔여 슬롯");
+
+// ── adaptAttachment (DS-40 §4.2.1) ──────────
+const att = adaptAttachment({
+  attachment_id: "att_1",
+  client_attachment_id: "client_att_1",
+  kind: "image",
+  filename: "paste-x.png",
+  mime_type: "image/png",
+  size_bytes: 1234,
+  width: 800,
+  height: 600,
+  preview_url: "/api/webgui/message-attachments/att_1/preview",
+  expires_at: "2026-06-12T05:00:00Z",
+});
+ok(att.attachmentId === "att_1" && att.clientAttachmentId === "client_att_1", "att: id 흡수");
+ok(att.previewUrl === "/api/webgui/message-attachments/att_1/preview" && att.mimeType === "image/png", "att: preview_url·mime 흡수");
+ok(att.width === 800 && att.height === 600 && att.sizeBytes === 1234, "att: 크기 메타 흡수");
+ok(adaptAttachment(null) === null, "att: null 방어");
+
+// adaptMessage 가 attachments 를 순서 보존하여 흡수
+const msgWithAtt = adaptMessages([
+  {
+    message_id: "ma1", room_id: "r", direction: "outbound", message_type: "user_message", text: "사진", status: "sent",
+    attachments: [
+      { attachment_id: "a1", kind: "image", filename: "1.png", mime_type: "image/png", size_bytes: 10, preview_url: "/p/a1" },
+      { attachment_id: "a2", kind: "image", filename: "2.jpg", mime_type: "image/jpeg", size_bytes: 20, preview_url: "/p/a2" },
+    ],
+  },
+  { message_id: "ma2", room_id: "r", direction: "inbound", message_type: "assistant_message", text: "확인", status: "received" },
+]);
+ok(msgWithAtt[0].attachments.length === 2 && msgWithAtt[0].attachments[0].attachmentId === "a1" && msgWithAtt[0].attachments[1].attachmentId === "a2", "msg: attachments 순서 보존 흡수");
+ok(Array.isArray(msgWithAtt[1].attachments) && msgWithAtt[1].attachments.length === 0, "msg: 첨부 없으면 빈 배열");
 
 // ── 결과 ────────────────────────────────────────────────────
 console.log(`\nselftest: ${pass} passed, ${fail} failed`);

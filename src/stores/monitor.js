@@ -14,6 +14,8 @@ import { reactive } from "vue";
 import * as api from "../api/index.js";
 import { ApiError } from "../api/client.js";
 import { adaptMessage, adaptRoom, roleOrder } from "../api/adapters.js";
+import { planArtifactChange } from "./artifactChange.js";
+import { validateImageFile, MAX_ATTACH_COUNT } from "../lib/imageAttach.js";
 import {
   MOCK_PROJECTS,
   MOCK_ROOMS,
@@ -46,6 +48,10 @@ export const store = reactive({
   draft: "",
   sending: false,
   sendError: null,
+  // 입력창 이미지 첨부(DV-91): pending 첨부 목록(순서 = 첨부 순서).
+  //   { clientId, name, sizeBytes, mime, status('uploading'|'ready'|'error'), progress(0~100),
+  //     localUrl(blob 미리보기), attachmentId, previewUrl, width, height, error }
+  composerAttachments: [],
   // 페이지네이션(WG-CHAT-02): 최초 20개 + 위로 스크롤 더보기(before-cursor)
   messagesCursor: null, // 더 과거를 가리키는 next_cursor
   messagesHasMore: false,
@@ -86,7 +92,12 @@ export function canCompose() {
 let ws = null;
 let pollTimer = null; // 선택방 메시지 polling
 let roomsPollTimer = null; // 방 목록/연결상태 + 팀뷰 미리보기 polling
+let artifactPollTimer = null; // 산출물 변경 polling(WG-ART-04 fallback)
 let pollCursor = null;
+// 산출물 변경 cursor(WG-ART-04). WS artifact_changed 의 envelope.cursor 로 갱신되며,
+// WS 단절 시 polling 의 after 로 이어받아 누락 변경을 복구한다. WS↔polling 전환에는 보존하고
+// 프로젝트 전환·정상종료(stopRealtime)에서만 초기화한다.
+let artifactCursor = null;
 let wsProjectId = null;
 let wsReconnectTimer = null; // WS 재연결 예약 타이머
 let wsReconnectAttempt = 0; // 재연결 시도 횟수(지수 backoff 인덱스)
@@ -108,7 +119,12 @@ function stopPolling() {
     clearInterval(roomsPollTimer);
     roomsPollTimer = null;
   }
+  if (artifactPollTimer) {
+    clearInterval(artifactPollTimer);
+    artifactPollTimer = null;
+  }
   pollCursor = null;
+  // artifactCursor 는 여기서 비우지 않는다(WS↔polling 전환 간 누락 복구 위해 보존).
 }
 
 function stopRealtime() {
@@ -121,6 +137,7 @@ function stopRealtime() {
     ws = null;
   }
   stopPolling();
+  artifactCursor = null; // 프로젝트 전환/정상종료 — 산출물 커서 완전 초기화
   wsProjectId = null;
 }
 
@@ -143,6 +160,12 @@ function handleWsEvent(ev) {
   const evProjectId =
     env.project_id ?? data.project_id ?? (data.room && data.room.project_id) ?? null;
   if (evProjectId && store.selectedProjectId && evProjectId !== store.selectedProjectId) return;
+  // 산출물 변경(DV-71, DS-40 §10.3): 같은 message-stream 채널로 수신. envelope.cursor 를
+  // 다음 polling fallback 의 after 로 보존하고, 열린 트리/현재 뷰어 파일만 재요청한다.
+  if (type === "artifact_changed") {
+    if (env.cursor) artifactCursor = env.cursor;
+    return applyArtifactChange(data);
+  }
   if (type === "room_upserted") return upsertRoomEvent(data.room || data);
   if (type === "room_connection_changed") return applyRoomConnection(data.room || data);
   // message 계열: update envelope({update_type,room_id,message}) 형태로 정규화 후 머지
@@ -233,6 +256,25 @@ function startPolling(projectId) {
       await loadRoomPreviews(6, { silent: true }); // 전체 팀원 보기 미리보기 갱신(스피너 토글 없이)
     } catch {}
   }, 5000);
+  // 산출물 변경 polling(WG-ART-04 fallback). WS 단절 동안 열린 트리·뷰어 파일을 동일 매핑으로 갱신.
+  //   artifactCursor 를 after 로 이어받아 누락분만 수신하고, 만료(409) 시 full resync 한다.
+  artifactPollTimer = setInterval(async () => {
+    if (store.selectedProjectId !== projectId || store.degraded) return;
+    try {
+      const { updates, next_cursor } = await api.fetchArtifactChanges(artifactCursor, projectId);
+      if (next_cursor) artifactCursor = next_cursor;
+      if (Array.isArray(updates)) for (const u of updates) applyArtifactChange(u);
+    } catch (e) {
+      // cursor 만료/buffer 밖 → 열린 트리 root + 뷰어 파일 full resync(DS-40 §20.3, DS-60 §8.4)
+      if (e instanceof ApiError && (e.status === 409 || e.code === "artifact_change_cursor_expired")) {
+        artifactCursor = null;
+        try {
+          await fullArtifactResync();
+        } catch {}
+      }
+      /* 그 외 일시 오류는 다음 tick 재시도 */
+    }
+  }, 4000);
 }
 
 function startRealtime(projectId) {
@@ -330,9 +372,32 @@ function mergeMessage(prev, next) {
   const merged = { ...prev };
   for (const k in next) {
     const v = next[k];
-    if (v !== undefined && v !== null) merged[k] = v;
+    if (v === undefined || v === null) continue;
+    // 첨부(이미지)는 희소 WS 갱신의 빈 배열이 기존 썸네일을 지우지 않도록 보호:
+    // next.attachments 가 비어 있고 prev 에 첨부가 있으면 prev 를 유지한다(DV-91).
+    if (k === "attachments" && Array.isArray(v) && v.length === 0 && Array.isArray(prev.attachments) && prev.attachments.length) {
+      continue;
+    }
+    merged[k] = v;
   }
   return merged;
+}
+
+// 서버 message 로 낙관적 항목을 치환하되 첨부 썸네일 연속성을 보존(DV-91).
+//  - 서버가 attachment 를 안 돌려주면 낙관적 첨부(localUrl 포함) 유지.
+//  - 서버가 attachment 를 주면 그것을 쓰되, 같은 attachment_id 의 낙관적 localUrl 을 이식해
+//    서버 preview 준비 전 깜빡임을 줄인다(localUrl 은 송신 성공 시 별도 revoke).
+function preserveAttachments(prev, saved) {
+  const prevAtt = (prev && Array.isArray(prev.attachments) && prev.attachments) || [];
+  if (!Array.isArray(saved.attachments) || saved.attachments.length === 0) {
+    if (prevAtt.length) saved.attachments = prevAtt;
+    return saved;
+  }
+  saved.attachments = saved.attachments.map((a) => {
+    const m = prevAtt.find((p) => p.attachmentId && p.attachmentId === a.attachmentId);
+    return m && m.localUrl && !a.localUrl ? { ...a, localUrl: m.localUrl } : a;
+  });
+  return saved;
 }
 
 // update(MessageUpdate) 목록을 머지. 선택된 방은 본문 스레드(store.messages)에,
@@ -405,6 +470,92 @@ export async function loadRoomPreviews(limit = 6, { silent = false } = {}) {
   }
 }
 
+// ── 산출물 실시간 갱신 (DV-71, DS-40 §10.3/§10.4, DS-60 §8.4) ──────────
+// artifact_changed(WS) 또는 WG-ART-04 polling 의 변경 1건을 화면에 반영한다.
+// 매핑 "결정"은 순수 모듈 planArtifactChange 가, 실제 부수효과(REST 재요청·상태 갱신)는 여기서 담당.
+function applyArtifactChange(data) {
+  if (store.degraded) return;
+  const plan = planArtifactChange(data, {
+    selectedProjectId: store.selectedProjectId,
+    viewerOpen: store.viewer.open,
+    viewerPath: store.viewer.path,
+    expanded: store.expanded,
+  });
+  if (plan.ignore) return;
+
+  // 1) 현재 뷰어 중인 파일 변경 반영
+  if (plan.viewer === "deleted") {
+    store.viewer.file = null;
+    store.viewer.error = "삭제된 산출물입니다 — 더 이상 존재하지 않습니다.";
+  } else if (plan.viewer === "reload") {
+    reloadViewer(plan.path); // modified/created → 최신 내용 재로딩
+  }
+
+  // 2) 삭제된 디렉토리면 트리 보조 상태(펼침/자식 캐시) 잔여 정리
+  if (plan.purge) purgeSubtree(plan.path);
+
+  // 3) 변경 노드를 나열하는 디렉토리가 화면에 보이면 그 디렉토리만 재요청
+  //    (created/modified/deleted 모두 디렉토리 재조회로 일괄 반영 — 추가·갱신·제거 동시 처리)
+  //    refreshDir === null 이면 보이지 않는 노드 → 즉시 재요청하지 않음(다음 펼침 때 최신).
+  if (plan.refreshDir !== null) refreshDirIfVisible(plan.refreshDir);
+}
+
+// 펼침/자식 캐시에서 path 및 그 하위 경로 키를 제거(삭제된 디렉토리 잔여 정리)
+function purgeSubtree(path) {
+  const pref = path + "/";
+  for (const k of Object.keys(store.expanded)) {
+    if (k === path || k.startsWith(pref)) delete store.expanded[k];
+  }
+  for (const k of Object.keys(store.childrenCache)) {
+    if (k === path || k.startsWith(pref)) delete store.childrenCache[k];
+  }
+}
+
+// 디렉토리가 화면에 보이는 경우에만 WG-ART-01 로 재조회(루트는 항상 보임).
+// 보이지 않으면 재요청하지 않는다(DS-40 §10.4: 다음 펼침 때 최신 결과 사용).
+async function refreshDirIfVisible(dirPath) {
+  if (store.degraded) return;
+  const pid = store.selectedProjectId;
+  const isRoot = dirPath === "" || dirPath == null;
+  if (!isRoot && !store.expanded[dirPath]) return; // 미펼침 → skip
+  try {
+    const { node } = await api.fetchTree(isRoot ? "" : dirPath, { depth: 1, projectId: pid });
+    if (store.selectedProjectId !== pid) return; // 그 사이 프로젝트 전환 → 폐기
+    if (isRoot) store.treeRoot = node;
+    else store.childrenCache[dirPath] = node.children || [];
+  } catch {
+    /* 일시 실패는 다음 이벤트/폴링에서 복구 */
+  }
+}
+
+// 현재 뷰어 파일 내용 재로딩(modified 반영). 비동기 도중 다른 파일로 전환되면 폐기.
+async function reloadViewer(path) {
+  if (store.degraded) return;
+  const pid = store.selectedProjectId;
+  try {
+    const file = await api.fetchFile(path, { prefer: "inline", projectId: pid });
+    if (store.viewer.open && store.viewer.path === path && store.selectedProjectId === pid) {
+      store.viewer.file = file;
+      store.viewer.error = null;
+    }
+  } catch (e) {
+    if (store.viewer.open && store.viewer.path === path && store.selectedProjectId === pid) {
+      // 재로딩 중 사라졌다면(404 등) not-found 안내로 전환
+      store.viewer.error = e instanceof ApiError ? e.message : "파일 재로딩 실패";
+    }
+  }
+}
+
+// cursor 만료(409) 시 full resync(DS-60 §8.4): 열린 트리 root + 펼친 디렉토리 + 현재 뷰어 파일.
+async function fullArtifactResync() {
+  if (store.degraded) return;
+  await refreshDirIfVisible("");
+  for (const p of Object.keys(store.expanded)) {
+    if (store.expanded[p]) await refreshDirIfVisible(p);
+  }
+  if (store.viewer.open && store.viewer.path) await reloadViewer(store.viewer.path);
+}
+
 // ── 액션 ────────────────────────────────────────────────────
 
 // 연결 실패(백엔드 미기동/DB 미가동)인지 판정.
@@ -474,6 +625,8 @@ export async function selectProject(projectId) {
   store.selectedRoomId = null;
   store.messages = [];
   store.roomPreviews = {}; // 전체 팀원 보기 미리보기 초기화
+  clearComposerAttachments(); // 입력창 pending 이미지 첨부 정리(이전 프로젝트 컨텍스트)
+  store.sendError = null;
   // 산출물 트리 초기화 후 재로드
   store.treeRoot = null;
   store.expanded = {};
@@ -571,12 +724,153 @@ function markRoomReadLocal(roomId) {
   if (r) r.unread = 0;
 }
 
+// ── 입력창 이미지 첨부 (DV-91, WG-MSG-06) ──────────────────────
+let attachSeq = 0;
+const nextAttachId = () => `client_att_${Date.now()}_${++attachSeq}`;
+
+// paste/드롭/파일선택으로 들어온 파일들을 검증·업로드한다(순서 보존). PM 방에서만 허용.
+export function addComposerImages(files) {
+  if (!canCompose()) return;
+  const list = Array.from(files || []).filter(Boolean);
+  store.sendError = null;
+  for (const file of list) {
+    // 메시지당 개수 한도(5개) — 한도 도달 시 나머지 무시 + 안내
+    if (store.composerAttachments.length >= MAX_ATTACH_COUNT) {
+      store.sendError = `이미지는 메시지당 최대 ${MAX_ATTACH_COUNT}개까지 첨부할 수 있습니다.`;
+      break;
+    }
+    const clientId = nextAttachId();
+    const v = validateImageFile(file);
+    if (!v.ok) {
+      // 형식/용량 위반 → error 칩으로 표시(전송 차단). 사용자가 제거 후 전송.
+      store.composerAttachments.push({
+        clientId, name: file.name || "image", sizeBytes: file.size, mime: file.type,
+        status: "error", progress: 0, localUrl: null, attachmentId: null, previewUrl: null,
+        width: null, height: null, error: v.message,
+      });
+      store.sendError = v.message;
+      continue;
+    }
+    const localUrl = typeof URL !== "undefined" && URL.createObjectURL ? URL.createObjectURL(file) : null;
+    const entry = {
+      clientId, name: file.name || "image", sizeBytes: file.size, mime: file.type,
+      status: "uploading", progress: 0, localUrl, attachmentId: null, previewUrl: null,
+      width: null, height: null, error: null,
+    };
+    store.composerAttachments.push(entry);
+    if (store.degraded) {
+      // 백엔드 미연결 → 실제 업로드 불가. 미리보기만 두되 전송 불가(error) 처리.
+      entry.status = "error";
+      entry.error = "오프라인 상태에서는 업로드할 수 없습니다.";
+      continue;
+    }
+    uploadComposerImage(entry, file);
+  }
+}
+
+async function uploadComposerImage(entry, file) {
+  const pid = store.selectedProjectId;
+  try {
+    const att = await api.uploadImageAttachment({
+      projectId: pid,
+      file,
+      clientAttachmentId: entry.clientId,
+      onProgress: (p) => {
+        const live = store.composerAttachments.find((a) => a.clientId === entry.clientId);
+        if (live) live.progress = Math.round(p * 100);
+      },
+    });
+    const live = store.composerAttachments.find((a) => a.clientId === entry.clientId);
+    if (!live) return; // 업로드 중 사용자가 제거 → 폐기
+    live.attachmentId = att.attachmentId;
+    live.previewUrl = att.previewUrl;
+    live.width = att.width;
+    live.height = att.height;
+    if (att.sizeBytes != null) live.sizeBytes = att.sizeBytes;
+    live.progress = 100;
+    live.status = "ready";
+  } catch (e) {
+    const live = store.composerAttachments.find((a) => a.clientId === entry.clientId);
+    if (!live) return;
+    live.status = "error";
+    live.error = e instanceof ApiError ? e.message : "업로드 실패";
+    store.sendError = "이미지 업로드에 실패했습니다. 해당 이미지를 제거 후 다시 시도하세요.";
+  }
+}
+
+export function removeComposerAttachment(clientId) {
+  const i = store.composerAttachments.findIndex((a) => a.clientId === clientId);
+  if (i < 0) return;
+  const a = store.composerAttachments[i];
+  if (a.localUrl) {
+    try { URL.revokeObjectURL(a.localUrl); } catch {}
+  }
+  store.composerAttachments.splice(i, 1);
+  if (!store.composerAttachments.some((x) => x.status === "error")) store.sendError = null;
+}
+
+function clearComposerAttachments({ revoke = true } = {}) {
+  if (revoke) {
+    for (const a of store.composerAttachments) {
+      if (a.localUrl) {
+        try { URL.revokeObjectURL(a.localUrl); } catch {}
+      }
+    }
+  }
+  store.composerAttachments = [];
+}
+
+export function composerUploading() {
+  return store.composerAttachments.some((a) => a.status === "uploading");
+}
+export function composerHasError() {
+  return store.composerAttachments.some((a) => a.status === "error");
+}
+export function composerReadyAttachments() {
+  return store.composerAttachments.filter((a) => a.status === "ready");
+}
+// 전송 가능 여부: (텍스트 또는 준비된 첨부) 있고, 업로드 중/실패 첨부가 없을 것.
+export function canSend() {
+  if (store.sending || !canCompose()) return false;
+  const hasText = store.draft.trim().length > 0;
+  const hasReady = composerReadyAttachments().length > 0;
+  if (!hasText && !hasReady) return false;
+  if (composerUploading() || composerHasError()) return false;
+  return true;
+}
+
 export async function send() {
   const text = store.draft.trim();
-  if (!text || store.sending) return;
+  if (store.sending) return;
   if (!canCompose()) return; // PM 방 외 송신 차단(이중 방어)
 
+  const ready = composerReadyAttachments();
+  if (!text && ready.length === 0) return; // 빈 메시지(텍스트·첨부 모두 없음) 차단
+  // 일부 실패 시 전체 실패(DS-40 §7.6): 업로드 중·실패 첨부가 있으면 전송 차단
+  if (composerUploading()) {
+    store.sendError = "이미지 업로드가 끝날 때까지 기다려 주세요.";
+    return;
+  }
+  if (composerHasError()) {
+    store.sendError = "업로드 실패한 이미지를 제거한 뒤 전송하세요.";
+    return;
+  }
+
   const clientMessageId = nextClientId();
+  // 송신 payload: attachment_id 순서 보존
+  const attachPayload = ready.map((a) => ({ attachment_id: a.attachmentId }));
+  // 낙관적 말풍선용 첨부(로컬 blob 미리보기 우선, 서버 preview_url 병행) — adaptAttachment 와 동일 카멜 형태
+  const optimisticAttachments = ready.map((a) => ({
+    attachmentId: a.attachmentId,
+    previewUrl: a.previewUrl,
+    localUrl: a.localUrl,
+    name: a.name,
+    mimeType: a.mime,
+    width: a.width,
+    height: a.height,
+    sizeBytes: a.sizeBytes,
+    kind: "image",
+  }));
   // 낙관적 추가
   const optimistic = {
     messageId: clientMessageId,
@@ -596,9 +890,13 @@ export async function send() {
     isRealData: true,
     isMock: false,
     teamSessionId: null,
+    attachments: optimisticAttachments,
   };
   store.messages.push(optimistic);
   store.draft = "";
+  // composer 썸네일은 비운다. localUrl 은 말풍선(optimistic)이 계속 참조하므로 여기서 revoke 금지.
+  const sentLocalUrls = ready.map((a) => a.localUrl).filter(Boolean);
+  clearComposerAttachments({ revoke: false });
   store.sending = true;
   store.sendError = null;
 
@@ -620,17 +918,27 @@ export async function send() {
       projectId: store.selectedProjectId,
       text,
       clientMessageId,
+      attachments: attachPayload,
     });
     // 서버 message 로 낙관적 항목 치환 (전체 필드 갱신, persona §3.4)
     const saved = data?.message ? adaptMessage(data.message) : null;
+    // 서버가 attachment(preview_url)를 돌려줬는지 — 줬으면 서버 preview 로 전환, 아니면 낙관적 유지
+    const serverHasAttachments = !!(saved && Array.isArray(saved.attachments) && saved.attachments.length);
     const idx = store.messages.findIndex((x) => x.messageId === clientMessageId);
-    if (saved && idx >= 0) store.messages[idx] = saved;
+    if (saved && idx >= 0) store.messages[idx] = preserveAttachments(store.messages[idx], saved);
     else if (saved) {
       // 낙관적 항목이 안 보이면, 이미 WS 이벤트가 같은 서버 메시지를 반영(치환)했을 수 있다.
       // 같은 messageId 가 이미 있으면 push 금지 → 머지(중복 말풍선 방지, race).
       const dup = store.messages.findIndex((x) => x.messageId === saved.messageId);
       if (dup >= 0) store.messages[dup] = mergeMessage(store.messages[dup], saved);
       else store.messages.push(saved);
+    }
+    // 서버 preview 로 전환된 경우에만 로컬 blob URL 해제(누수 방지).
+    // 서버가 attachment 를 안 돌려줬으면 낙관적 localUrl 을 계속 써야 하므로 유지한다.
+    if (serverHasAttachments) {
+      for (const u of sentLocalUrls) {
+        try { URL.revokeObjectURL(u); } catch {}
+      }
     }
   } catch (e) {
     const idx = store.messages.findIndex((x) => x.messageId === clientMessageId);

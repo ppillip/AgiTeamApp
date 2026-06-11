@@ -8,6 +8,10 @@ SQLAlchemy>=2.0
 greenlet>=3.0          # SQLAlchemy async 필수
 # PostgreSQL async 드라이버 (DS-30 PostgreSQL 확정). 둘 중 하나 사용.
 psycopg[binary]>=3.2
+# 산출물 폴더 동기화 watcher (DV-70 / DS-100). macOS=FSEvents, Linux=inotify 래핑.
+watchdog>=4.0
+# 이미지 첨부 multipart 업로드 (DV-90 / WG-MSG-06). FastAPI Form/File 의존.
+python-multipart>=0.0.9
 # 테스트
 httpx>=0.27
 pytest>=8.0

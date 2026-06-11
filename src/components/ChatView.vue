@@ -1,7 +1,17 @@
 <script>
 import Icon from "./Icon.vue";
-import { store, selectedRoom, canCompose, send, loadOlderMessages } from "../stores/monitor.js";
+import {
+  store,
+  selectedRoom,
+  canCompose,
+  send,
+  loadOlderMessages,
+  addComposerImages,
+  removeComposerAttachment,
+  canSend,
+} from "../stores/monitor.js";
 import { roleLabel, connectionInfo } from "../api/adapters.js";
+import { attachmentPreviewSrc } from "../api/index.js";
 import { renderMessageBody } from "../lib/sanitize.js";
 
 // provenance tone → 배지 색(DS-60 §6.1). live=실데이터(녹색), sent=발신(amber),
@@ -27,7 +37,7 @@ export default {
   // thread 좌우 패딩을 줄여 좁은 화면 가용폭을 최대한 쓴다(데스크탑은 prop 미전달=false → 무변경).
   props: { mobile: { type: Boolean, default: false } },
   data() {
-    return { prevScrollHeight: null };
+    return { prevScrollHeight: null, dragOver: false };
   },
   computed: {
     store: () => store,
@@ -36,6 +46,12 @@ export default {
     },
     canCompose() {
       return canCompose();
+    },
+    composerAttachments() {
+      return store.composerAttachments;
+    },
+    canSendNow() {
+      return canSend();
     },
     messages() {
       return store.messages;
@@ -106,12 +122,61 @@ export default {
     send,
     renderMessageBody,
     loadOlderMessages,
+    removeComposerAttachment,
     // 전송 + 입력창 초기화/재포커스(연속 입력 끊김 방지).
-    // send() 가 store.draft 를 동기적으로 비우므로 nextTick 후 높이 리셋·포커스.
+    // 텍스트가 없어도 준비된 이미지 첨부가 있으면 전송 가능(canSend).
     submit() {
-      if (store.sending || !store.draft.trim()) return;
+      if (!canSend()) return;
       send();
       this.$nextTick(() => this.resetComposer());
+    },
+    // 말풍선/썸네일 src: 서버 preview_url 우선(self-contained), 없으면 로컬 blob(localUrl).
+    attThumbSrc(att) {
+      return attachmentPreviewSrc(att.previewUrl) || att.localUrl || null;
+    },
+    // 입력창 pending 썸네일 src: 업로드 중엔 preview_url 이 없으므로 로컬 blob 우선.
+    pendingThumbSrc(att) {
+      return att.localUrl || attachmentPreviewSrc(att.previewUrl) || null;
+    },
+    // 클립보드 paste 에서 이미지 blob 추출(PNG/JPG/WebP/GIF). 이미지가 있으면 기본 붙여넣기 막음.
+    onComposerPaste(e) {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      const files = [];
+      for (const it of items) {
+        if (it.kind === "file" && it.type && it.type.indexOf("image/") === 0) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length) {
+        e.preventDefault(); // 이미지 데이터 URL 이 텍스트로 끼어드는 것 방지
+        addComposerImages(files);
+      }
+    },
+    // 파일 선택(클립 버튼)
+    onPickFiles(e) {
+      const files = e.target.files;
+      if (files && files.length) addComposerImages(files);
+      e.target.value = ""; // 같은 파일 재선택 허용
+    },
+    openFilePicker() {
+      const el = this.$refs.fileInput;
+      if (el) el.click();
+    },
+    // 드래그&드롭 업로드
+    onDrop(e) {
+      this.dragOver = false;
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) {
+        const imgs = Array.from(files).filter((f) => f.type && f.type.indexOf("image/") === 0);
+        if (imgs.length) addComposerImages(imgs);
+      }
+    },
+    onDragOver() {
+      if (this.canCompose) this.dragOver = true;
+    },
+    onDragLeave() {
+      this.dragOver = false;
     },
     resetComposer() {
       const el = this.$refs.composer;
@@ -270,11 +335,23 @@ export default {
                 v-html="renderMessageBody(it.m.text)"
               ></div>
               <div
-                v-else
+                v-else-if="it.m.text"
                 class="md-body md-chat break-words rounded-2xl rounded-tr-[5px] border px-[17px] py-[13px]"
                 :class="it.m.failed ? 'md-chat-fail border-red-200 bg-red-50' : 'md-chat-out border-amber-tintbd bg-amber-tint'"
                 v-html="renderMessageBody(it.m.text)"
               ></div>
+
+              <!-- 이미지 첨부 썸네일(DV-91): 순서 보존. 클릭 시 원본(preview) 새 탭. -->
+              <div v-if="it.m.attachments && it.m.attachments.length"
+                   class="mt-2 flex flex-wrap gap-2"
+                   :class="it.m.out ? 'justify-end' : ''">
+                <a v-for="(att, ai) in it.m.attachments" :key="att.attachmentId || ai"
+                   :href="attThumbSrc(att)" target="_blank" rel="noopener noreferrer"
+                   class="block overflow-hidden rounded-xl border border-line bg-[#FAFAFB]">
+                  <img :src="attThumbSrc(att)" :alt="att.filename || att.name || 'image'"
+                       class="max-h-[180px] max-w-[220px] object-contain" />
+                </a>
+              </div>
 
               <div class="mt-[7px] flex items-center gap-1.5 text-[11.5px] text-ink-300">
                 <span>{{ fmtTime(it.m.occurredAt) }}</span>
@@ -293,23 +370,75 @@ export default {
       </div>
 
       <!-- 입력창: PM 방에서만 -->
-      <div v-if="canCompose" class="flex-shrink-0 border-t border-line-soft bg-white px-5 py-4">
+      <div
+        v-if="canCompose"
+        class="relative flex-shrink-0 border-t border-line-soft bg-white px-5 py-4"
+        :class="dragOver ? 'ring-2 ring-amber-tintbd ring-inset' : ''"
+        @drop.prevent="onDrop"
+        @dragover.prevent="onDragOver"
+        @dragleave="onDragLeave"
+      >
+        <!-- 드래그 오버레이 안내 -->
+        <div v-if="dragOver" class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-amber-tint/70 text-[13px] font-semibold text-amber-700">
+          이미지를 여기에 놓아 첨부
+        </div>
+
         <div v-if="store.sendError" class="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-red-500">
           <Icon name="alert" :size="14" />{{ store.sendError }}
         </div>
+
+        <!-- pending 첨부 썸네일 스트립(전송 전 제거 가능) -->
+        <div v-if="composerAttachments.length" class="mb-2.5 flex flex-wrap gap-2">
+          <div v-for="att in composerAttachments" :key="att.clientId"
+               class="relative h-16 w-16 overflow-hidden rounded-lg border"
+               :class="att.status === 'error' ? 'border-red-300' : 'border-line'">
+            <img v-if="pendingThumbSrc(att)" :src="pendingThumbSrc(att)" :alt="att.name"
+                 class="h-full w-full object-cover" :class="att.status !== 'ready' ? 'opacity-60' : ''" />
+            <div v-else class="flex h-full w-full items-center justify-center bg-line-soft text-ink-400">
+              <Icon name="alert" :size="16" />
+            </div>
+            <!-- 업로드 진행/상태 오버레이 -->
+            <div v-if="att.status === 'uploading'" class="absolute inset-0 flex items-center justify-center bg-black/30 text-[10.5px] font-bold text-white">
+              {{ att.progress }}%
+            </div>
+            <div v-else-if="att.status === 'error'" class="absolute inset-0 flex items-center justify-center bg-red-500/25 text-red-700"
+                 :title="att.error || '업로드 실패'">
+              <Icon name="alert" :size="16" />
+            </div>
+            <!-- 제거 버튼 -->
+            <button @click="removeComposerAttachment(att.clientId)" type="button"
+                    class="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-ink-900/70 text-white hover:bg-ink-900"
+                    title="첨부 제거">
+              <Icon name="x" :size="10" :stroke="3" />
+            </button>
+          </div>
+        </div>
+
+        <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" @change="onPickFiles" />
+
         <div class="flex items-end gap-2.5">
+          <!-- 이미지 첨부 버튼 -->
+          <button
+            @click="openFilePicker"
+            type="button"
+            class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-[13px] border border-line bg-[#F4F4F6] text-ink-500 hover:bg-line-soft"
+            title="이미지 첨부 (붙여넣기·드래그도 가능)"
+          >
+            <Icon name="paperclip" :size="19" />
+          </button>
           <textarea
             ref="composer"
             v-model="draftProxy"
             @input="autoGrow"
             @keydown="onComposerKeydown"
+            @paste="onComposerPaste"
             rows="1"
             class="nice-scroll min-h-[48px] max-h-[148px] flex-1 resize-none overflow-y-auto rounded-[13px] border border-line bg-[#F4F4F6] px-[18px] py-[13px] text-[14.5px] leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:border-amber-tintbd focus:bg-white"
-            placeholder="PM에게 메시지를 입력하세요…  (Enter 전송 · Shift+Enter 줄바꿈)"
+            placeholder="PM에게 메시지를 입력하세요…  (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기 가능)"
           ></textarea>
           <button
             @click="submit"
-            :disabled="store.sending || !draftProxy.trim()"
+            :disabled="!canSendNow"
             class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-[13px] bg-amber text-white shadow-[0_2px_8px_rgba(221,107,31,0.32)] hover:bg-amber-600 disabled:opacity-50"
           >
             <Icon name="send" :size="20" />

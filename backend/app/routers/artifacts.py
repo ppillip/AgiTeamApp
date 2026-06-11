@@ -31,6 +31,32 @@ def _svc(request: Request, project_id: str | None = None) -> ArtifactService:
     return ArtifactService(root, display_root=display)
 
 
+@router.get("/changes", dependencies=[Depends(require_auth)])
+async def get_changes(
+    request: Request,
+    project_id: str = Query(...),
+    after: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """WG-ART-04 산출물 변경 이벤트 polling fallback (DS-40 §20).
+
+    WebSocket 단절/reconnect 실패 중에도 산출물 폴더 변경을 화면에 반영하기 위한 fallback.
+    반환 모델은 WebSocket `artifact_changed` 의 `data` 와 동일하다. project_id 격리 강제.
+    """
+    from ..services.artifact_watcher import CursorExpired, CursorParseError
+
+    watcher = getattr(request.app.state, "artifact_watcher", None)
+    if watcher is None or not getattr(watcher, "enabled", False):
+        raise errors.artifact_watcher_unavailable()
+    try:
+        updates, next_cursor = watcher.buffer.changes_after(project_id, after, limit)
+    except CursorParseError:
+        raise errors.invalid_pagination("invalid after cursor format")
+    except CursorExpired:
+        raise errors.artifact_change_cursor_expired()
+    return ok({"updates": updates, "next_cursor": next_cursor})
+
+
 @router.get("/tree", dependencies=[Depends(require_auth)])
 async def get_tree(
     request: Request,

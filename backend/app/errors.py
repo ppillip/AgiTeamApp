@@ -144,6 +144,73 @@ def invalid_tree_query(msg: str = "Invalid tree query.") -> WebguiError:
     return WebguiError("invalid_tree_query", 422, msg)
 
 
+# 산출물 변경 polling (WG-ART-04 / DS-40 §20.4)
+def invalid_pagination(msg: str = "Invalid pagination cursor.") -> WebguiError:
+    return WebguiError("invalid_pagination", 422, msg)
+
+
+def artifact_change_cursor_expired() -> WebguiError:
+    return WebguiError(
+        "artifact_change_cursor_expired", 409, "Change cursor is outside the retained buffer."
+    )
+
+
+def artifact_watcher_unavailable() -> WebguiError:
+    return WebguiError(
+        "artifact_watcher_unavailable", 503, "Artifact watcher is not active."
+    )
+
+
+# 이미지 첨부 (WG-MSG-06 / DS-40 §7.6.5, DS-120)
+def project_not_found() -> WebguiError:
+    return WebguiError("project_not_found", 404, "Project not found.")
+
+
+def unsupported_image_type() -> WebguiError:
+    return WebguiError("unsupported_image_type", 415, "Unsupported image format.")
+
+
+def invalid_image() -> WebguiError:
+    return WebguiError("invalid_image", 422, "File is not a valid image.")
+
+
+def attachment_too_large() -> WebguiError:
+    return WebguiError("attachment_too_large", 413, "Image exceeds the allowed size.")
+
+
+def attachment_storage_unavailable() -> WebguiError:
+    return WebguiError("attachment_storage_unavailable", 503, "Attachment storage is unavailable.")
+
+
+def attachment_not_found() -> WebguiError:
+    return WebguiError("attachment_not_found", 404, "Attachment not found.")
+
+
+def attachment_expired() -> WebguiError:
+    return WebguiError("attachment_expired", 410, "Attachment has expired.")
+
+
+def too_many_attachments() -> WebguiError:
+    return WebguiError("too_many_attachments", 413, "Too many attachments for one message.")
+
+
+# AttachmentService 오류 code → WebguiError 매핑 (DS-40 §7.6.5)
+_ATTACHMENT_ERROR_MAP = {
+    "unsupported_image_type": unsupported_image_type,
+    "invalid_image": invalid_image,
+    "attachment_too_large": attachment_too_large,
+    "attachment_storage_unavailable": attachment_storage_unavailable,
+    "attachment_not_found": attachment_not_found,
+    "attachment_expired": attachment_expired,
+    "too_many_attachments": too_many_attachments,
+}
+
+
+def attachment_error(code: str) -> WebguiError:
+    factory = _ATTACHMENT_ERROR_MAP.get(code)
+    return factory() if factory else internal_error()
+
+
 # --- 핸들러 등록 ------------------------------------------------------------
 
 async def webgui_error_handler(_: Request, exc: WebguiError) -> JSONResponse:

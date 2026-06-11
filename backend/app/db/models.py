@@ -104,6 +104,8 @@ class WebguiMessage(Base):
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 이미지 첨부 공개 메타 목록 (DV-90, DS-40 §4.2.1). host 절대경로는 담지 않는다.
+    attachments_json: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="received")
     occurred_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     recorded_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())

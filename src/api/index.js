@@ -1,11 +1,12 @@
 // WebGUI API 엔드포인트 (DS-40 §5 목록). 모든 호출은 봉투 해제된 data 를 반환.
-import { http, apiUrl, wsUrl } from "./client.js";
+import { http, apiUrl, wsUrl, mediaUrl, uploadMultipart } from "./client.js";
 import {
   adaptProjects,
   adaptRooms,
   adaptMessages,
   adaptNode,
   adaptFile,
+  adaptAttachment,
 } from "./adapters.js";
 
 const P = "/api/webgui";
@@ -42,13 +43,34 @@ export async function markRead(roomId, { readUntil, lastReadMessageId } = {}) {
 }
 
 // WG-MSG-02 — PM 경유 송신 (project_id 만 필요)
-export async function sendMessage({ projectId, text, clientMessageId }) {
-  const data = await http.post(`${P}/messages`, {
+// attachments: WG-MSG-06 으로 사전 업로드한 [{ attachment_id }] (순서 보존). 없으면 미포함.
+export async function sendMessage({ projectId, text, clientMessageId, attachments }) {
+  const body = {
     project_id: projectId,
     text,
     client_message_id: clientMessageId,
-  });
+  };
+  if (Array.isArray(attachments) && attachments.length) body.attachments = attachments;
+  const data = await http.post(`${P}/messages`, body);
   return data; // { ack, message }
+}
+
+// WG-MSG-06 — 웹 채팅 이미지 첨부 업로드(multipart). 성공 시 attachment 메타(+preview_url) 반환.
+// client_attachment_id 로 FE optimistic 썸네일과 매칭. onProgress(0~1) 로 진행률 콜백.
+export async function uploadImageAttachment({ projectId, file, clientAttachmentId, onProgress }) {
+  const fd = new FormData();
+  fd.append("project_id", projectId);
+  if (clientAttachmentId) fd.append("client_attachment_id", clientAttachmentId);
+  fd.append("file", file, file.name || "image.png");
+  const data = await uploadMultipart(`${P}/message-attachments/images`, fd, { onProgress });
+  return adaptAttachment(data.attachment || data);
+}
+
+// 말풍선/썸네일 src. preview_url 은 self-contained(DS-40 v0.22 / DV-90): BE 가 attachment_id 로
+// project 를 전역 해소하므로 project_id 쿼리가 불필요하다. preview_url 을 그대로 사용(+토큰만 부착).
+export function attachmentPreviewSrc(previewUrl) {
+  if (!previewUrl) return null;
+  return mediaUrl(previewUrl);
 }
 
 // WG-MSG-04 — polling fallback.
@@ -90,4 +112,17 @@ export async function fetchFile(path, { prefer = "inline", projectId } = {}) {
 // WG-ART-03 — 스트림 URL (pdf iframe/embed 용, 선택 프로젝트 기준)
 export function fileStreamUrl(path, variant = "original", projectId) {
   return apiUrl(`${P}/artifacts/file/stream`, { project_id: projectId || undefined, path, variant });
+}
+
+// WG-ART-04 — 산출물 변경 polling fallback (DS-40 §20). WebSocket(artifact_changed) 단절 중
+// 산출물 폴더 변경을 화면에 반영하기 위한 보강 경로. 반환 모델은 artifact_changed 의 data 와 동일.
+//   - after: 마지막 처리 cursor(`timestamp|artifact:<urlencoded path>`). 없으면 최근 변경 일부.
+//   - cursor 만료 시 BE 는 409(artifact_change_cursor_expired) → 호출부가 full resync.
+export async function fetchArtifactChanges(after, projectId, { limit = 200 } = {}) {
+  const data = await http.get(`${P}/artifacts/changes`, {
+    project_id: projectId || undefined,
+    after: after || undefined,
+    limit,
+  });
+  return data; // { updates, next_cursor }
 }

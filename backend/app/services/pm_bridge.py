@@ -35,9 +35,34 @@ from .masking import mask_payload
 PM_ROLE_ID = "PM"
 logger = logging.getLogger(__name__)
 
+_EMPTY_ATTACHMENT_TEXT = "첨부 이미지를 확인하세요."
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def compose_submit_text(user_text: str, abs_paths: list[str], agent_type: str | None) -> str:
+    """cmux 제출 텍스트 합성 (DS-60 §5.4.3/§5.4.4). 절대경로는 제출 payload 전용.
+
+    - claude_code(기본/unknown): 이미지별 `[Image: source: <abs>]` 라인 (paste 방식 A).
+    - codex: 사용자 text 뒤 `첨부 이미지 파일 경로:` 목록 + 절대경로.
+    첨부 순서를 그대로 보존한다(§5.4.6). 첨부가 없으면 user_text 를 그대로 반환.
+    """
+    text = (user_text or "").strip()
+    if not abs_paths:
+        return text
+    at = (agent_type or "").strip().lower()
+    if not text:
+        text = _EMPTY_ATTACHMENT_TEXT
+    if at == "codex":
+        lines = [text, "", "첨부 이미지 파일 경로:"]
+        lines.extend(abs_paths)
+        return "\n".join(lines)
+    # claude_code / unknown / None → Claude paste 형식 (최소 침습 기본값, §5.4.4)
+    lines = [text, ""]
+    lines.extend(f"[Image: source: {p}]" for p in abs_paths)
+    return "\n".join(lines)
 
 
 class PMBridge:
@@ -68,6 +93,18 @@ class PMBridge:
         except Exception:  # noqa: BLE001
             return
 
+    def _resolve_pm_agent_type(self, project_id: str, room) -> str | None:
+        """PM agent_type 해소 (DS-60 §5.4.4). Discovery registry 우선, 없으면 room metadata.
+
+        값이 없으면 None 반환 → 합성에서 Claude Code 로 간주(현 Panthea 운용 기준)."""
+        try:
+            info = self.registry.resolve(project_id, PM_ROLE_ID)
+            if info is not None and info.agent_type:
+                return info.agent_type
+        except Exception:  # noqa: BLE001
+            pass
+        return getattr(room, "agent_type", None)
+
     async def send(
         self,
         db: AsyncSession,
@@ -75,10 +112,43 @@ class PMBridge:
         project_id: str,
         text: str,
         client_message_id: str | None = None,
+        attachments: list | None = None,
+        attachment_service=None,
     ) -> dict:
         clean = (text or "").strip()
-        if not clean:
+        # 첨부 ID 목록(순서 보존). 첨부가 있으면 text 빈 문자열 허용 (DS-40 §7.5).
+        attachment_ids: list[str] = []
+        for a in attachments or []:
+            aid = a.get("attachment_id") if isinstance(a, dict) else getattr(a, "attachment_id", None)
+            if aid:
+                attachment_ids.append(aid)
+        if not clean and not attachment_ids:
             raise errors.empty_message()
+        if len(attachment_ids) > self.settings.attachment_max_per_message:
+            raise errors.too_many_attachments()
+
+        # 첨부 절대경로 해소: 일부라도 만료/없음이면 전체 송신 실패(§5.4.6 부분송신 금지).
+        # 공개 메타(절대경로 제외)와 내부 절대경로를 분리 수집한다.
+        resolved_abs_paths: list[str] = []
+        public_attachments: list[dict] = []
+        if attachment_ids:
+            if attachment_service is None:
+                from .attachment_service import AttachmentService
+
+                attachment_service = AttachmentService(
+                    self.settings.project_root(project_id),
+                    max_bytes=self.settings.attachment_max_bytes,
+                    ttl_seconds=self.settings.attachment_ttl_seconds,
+                )
+            from .attachment_service import AttachmentError
+
+            for aid in attachment_ids:
+                try:
+                    stored = attachment_service.resolve(project_id, aid)
+                except AttachmentError as exc:
+                    raise errors.attachment_error(exc.code)
+                resolved_abs_paths.append(stored.abs_path)
+                public_attachments.append(stored.public_dict())
 
         # cmux short refs are workspace-scoped. Refresh immediately before
         # resolving so the bridge uses a matching workspace_id + surface_id pair
@@ -159,7 +229,17 @@ class PMBridge:
         room.current_surface_id = surface_id
         room.ready_state = "ready"
 
-        # 4) outbound pending 선저장
+        # 3.5) 첨부 합성 (DS-60 §5.4). PM agent_type 분기로 제출 텍스트 합성.
+        #      - DB 공개 text(normalized_text)는 사용자 원문만 유지(§5.4.5, transcript dedupe).
+        #      - 절대경로가 든 합성 텍스트는 cmux submit payload 로만 사용한다.
+        agent_type = self._resolve_pm_agent_type(project_id, room) if resolved_abs_paths else None
+        submit_text = (
+            compose_submit_text(clean, resolved_abs_paths, agent_type)
+            if resolved_abs_paths
+            else clean
+        )
+
+        # 4) outbound pending 선저장 (공개 text = 사용자 원문, 첨부 메타는 attachments_json)
         correlation_id = uuid.uuid4()
         msg = await repo.create_message(
             db,
@@ -173,13 +253,14 @@ class PMBridge:
             message_type="user_message",
             raw_text=clean,
             normalized_text=clean,
+            attachments_json=public_attachments or None,
             status="pending",
             occurred_at=_now(),
         )
         await db.commit()
 
-        # 5) cmux submit (DB transaction 밖)
-        result = await self.adapter.submit(surface_id, clean, workspace_id, tty)
+        # 5) cmux submit (DB transaction 밖) — 합성된 제출 텍스트(절대경로 포함) 사용
+        result = await self.adapter.submit(surface_id, submit_text, workspace_id, tty)
         submitted = bool(result.get("submitted"))
 
         msg.status = "sent" if submitted else "failed"

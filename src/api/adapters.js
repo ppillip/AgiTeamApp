@@ -160,6 +160,23 @@ export function adaptRooms(data) {
 const CANONICAL_SOURCES = ["bridge", "pm_bridge", "transcript", "webgui", "hook"];
 const DIAGNOSTIC_SOURCES = ["read_screen", "role_log", "raw_log_collector", "log", "raw_log"];
 
+// MessageAttachment(DS-40 §4.2.1) → 카멜케이스 표시 모델. preview_url 만 화면 노출(절대경로 없음).
+export function adaptAttachment(a) {
+  if (!a) return null;
+  return {
+    attachmentId: a.attachment_id,
+    clientAttachmentId: a.client_attachment_id || null,
+    kind: a.kind || "image",
+    filename: a.filename || null,
+    mimeType: a.mime_type || null,
+    sizeBytes: a.size_bytes ?? null,
+    width: a.width ?? null,
+    height: a.height ?? null,
+    previewUrl: a.preview_url || null,
+    expiresAt: a.expires_at || null,
+  };
+}
+
 export function adaptMessage(m) {
   const role = pickRole(m);
   // 질문(user)=우측, 답변(assistant)=좌측. 방향이 명시되면 그대로 따르고,
@@ -208,6 +225,8 @@ export function adaptMessage(m) {
     failed: m.status === "failed",
     unmatched: m.status === "unmatched" || m.message_type === "unmatched",
     degraded,
+    // 이미지 첨부(DV-91): 순서 보존. preview_url 만 노출(호스트 절대경로 없음).
+    attachments: Array.isArray(m.attachments) ? m.attachments.map(adaptAttachment).filter(Boolean) : [],
   };
 }
 

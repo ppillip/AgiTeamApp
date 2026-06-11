@@ -76,6 +76,52 @@ export const http = {
   post: (path, json, params) => request("POST", path, { json, params }),
 };
 
+// 헤더를 실을 수 없는 미디어 요청(<img src> 등)용 URL. params + 토큰을 query 로 부착.
+// (preview_url 은 인증·project 권한을 확인하는 binary image 응답 — DS-40 §7.6.6)
+export function mediaUrl(path, params) {
+  const merged = { ...(params || {}) };
+  if (TOKEN) merged.token = TOKEN;
+  return apiUrl(path, merged);
+}
+
+// multipart/form-data 업로드(WG-MSG-06). fetch 는 업로드 progress 노출이 어려워 XHR 사용.
+// 성공 시 봉투 해제된 data 반환, 실패는 ApiError(code/status) throw — http.post 와 동일 규약.
+export function uploadMultipart(path, formData, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", apiUrl(path));
+    if (TOKEN) xhr.setRequestHeader("Authorization", `Bearer ${TOKEN}`);
+    // Content-Type 은 브라우저가 boundary 와 함께 자동 설정(직접 지정 금지)
+    if (xhr.upload && typeof onProgress === "function") {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
+    }
+    xhr.onload = () => {
+      let body = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        body = null;
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && !(body && body.ok === false)) {
+        resolve(body?.data ?? body);
+      } else {
+        const err = (body && body.error) || {};
+        reject(
+          new ApiError(err.message || xhr.statusText || "업로드 실패", {
+            code: err.code || `http_${xhr.status}`,
+            status: xhr.status,
+            details: err.details || null,
+          })
+        );
+      }
+    };
+    xhr.onerror = () => reject(new ApiError("백엔드에 연결할 수 없습니다.", { code: "network_error", status: 0 }));
+    xhr.send(formData);
+  });
+}
+
 // WebSocket URL(WG-MSG-05). 우선순위: VITE_WS_BASE(직접 연결) → VITE_API_BASE → 동일 출처(프록시).
 // token 은 query 로 전달. http→ws, https→wss 로 보정(ws/wss 베이스는 그대로 유지).
 export function wsUrl(path, params) {

@@ -44,14 +44,21 @@ class MessageUpdate(BaseModel):
     occurred_at: datetime
 
 
+class AttachmentRef(BaseModel):
+    # WG-MSG-06 으로 사전 업로드한 첨부 참조 (DS-40 §7.5)
+    attachment_id: str
+
+
 class SendMessageRequest(BaseModel):
     # [라우팅 확정] 송신 대상은 항상 PM. project_id 로 어느 팀의 PM 인지 지정한다.
     # room_id/role_id 는 DS-40 호환을 위해 선택 수용하되 라우팅에 사용하지 않는다.
-    text: str
+    # text 는 attachments 가 있으면 빈 문자열 허용(DS-40 §7.5) → 기본값 "".
+    text: str = ""
     project_id: str | None = None
     room_id: str | None = None
     role_id: str | None = None
     client_message_id: str | None = None
+    attachments: list[AttachmentRef] | None = None
 
 
 class SendAck(BaseModel):

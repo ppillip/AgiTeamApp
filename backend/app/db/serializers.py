@@ -70,6 +70,8 @@ def message_to_dict(
         "source": m.source,
         "message_type": m.message_type,
         "text": m.normalized_text,
+        # 이미지 첨부 공개 메타 (DV-90, DS-40 §4.2.1). 절대경로 미포함.
+        "attachments": m.attachments_json or [],
         "status": m.status,
         "provenance": provenance_dict(m.source, runtime_state=runtime_state, transport=transport),
         "occurred_at": m.occurred_at,

@@ -22,8 +22,17 @@ from .errors import (
     unhandled_error_handler,
     webgui_error_handler,
 )
-from .routers import artifacts, collector, messages, projects, rooms, runtime
+from .routers import (
+    artifacts,
+    collector,
+    message_attachments,
+    messages,
+    projects,
+    rooms,
+    runtime,
+)
 from .services.artifact_service import ArtifactService
+from .services.artifact_watcher import ArtifactWatcher
 from .services.background import BackgroundManager
 from .services.cmux_discovery import registry as discovery_registry
 
@@ -34,9 +43,14 @@ async def lifespan(app: FastAPI):
     app.state.artifact_service = ArtifactService(settings.artifacts_root_resolved)
     app.state.registry = discovery_registry
     app.state.background = BackgroundManager()
+    # 산출물 변경 watcher (DV-70). watchdog 미설치/대상없음 시 enabled=False 로 degrade.
+    app.state.artifact_watcher = ArtifactWatcher(settings, discovery_registry)
     if settings.enable_background:
         app.state.background.start(settings, discovery_registry, get_sessionmaker())
+    if settings.artifact_watcher_enabled:
+        app.state.artifact_watcher.start()
     yield
+    await app.state.artifact_watcher.stop()
     await app.state.background.stop()
     await dispose_engine()
 
@@ -72,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(runtime.router)
     app.include_router(messages.router)
+    app.include_router(message_attachments.router)
     app.include_router(rooms.router)
     app.include_router(collector.router)
     app.include_router(collector.hook_router)

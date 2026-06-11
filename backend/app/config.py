@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     project_roots_json: str | None = None      # 예: '{"Panthea":"/abs/Panthea"}'
     agiteam_logs_subdir: str = ".agiteam/logs"
     discovery_poll_seconds: float = 5.0
+    # 산출물 변경 watcher (DV-70 / DS-100). watchdog 미설치 시 자동 degrade.
+    artifact_watcher_enabled: bool = True
+    artifact_debounce_seconds: float = 0.3        # DS-60 §11.7 기본 debounce window 300ms
+    artifact_hard_flush_seconds: float = 1.0      # burst hard flush 1000ms
+    artifact_buffer_ttl_seconds: int = 600        # WG-ART-04 ring buffer TTL 10분
+    artifact_buffer_min_keep: int = 1000          # 프로젝트별 최소 보존 건수
+
+    # 이미지 첨부 업로드 (DV-90 / DS-120). 저장 root = <project_root>/.agiteam/webgui/uploads/images
+    attachment_max_bytes: int = 10 * 1024 * 1024  # 파일당 10 MiB
+    attachment_max_per_message: int = 5           # 메시지당 이미지 개수
+    attachment_ttl_seconds: int = 24 * 3600       # 임시 업로드 TTL 기본 24h
+    attachment_cleanup_seconds: float = 3600.0    # TTL cleanup 주기
     discovery_missed_threshold: int = 2       # cmux tree 누락 N회 초과 시 disconnected
     # transcript 는 hook_stop 트리거가 주 경로(DV-25 정정). 이 폴링은 안전망 fallback 이므로 길게.
     transcript_poll_seconds: float = 30.0     # transcript JSONL canonical tail fallback 주기
