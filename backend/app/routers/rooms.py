@@ -18,6 +18,7 @@ from ..deps import get_db, require_auth
 from ..schemas.common import ok
 from ..schemas.message import ReadRequest
 from ..services.cmux_discovery import registry
+from ..services.log_collector import activity_registry
 
 router = APIRouter(prefix="/api/webgui/rooms", tags=["rooms"])
 
@@ -31,6 +32,8 @@ async def _last_message(db: AsyncSession, room):
 def _with_connection(d: dict, project_id: str, role_id: str) -> dict:
     info = registry.resolve(project_id, role_id)
     d["connection_state"] = info.connection_state if info else "disconnected"
+    # 동작중/조용함 현재값을 REST 응답에도 실어 초기 로드/재연결 시 FE 가 즉시 반영 (요구사항 15-1)
+    d["runtime_activity"] = activity_registry.get(project_id, role_id)
     return d
 
 
@@ -102,7 +105,13 @@ async def list_messages(
     )
     return ok(
         {
-            "room": room_summary_dict(room, last, cs, connection_state=conn_state),
+            "room": room_summary_dict(
+                room,
+                last,
+                cs,
+                connection_state=conn_state,
+                runtime_activity=activity_registry.get(room.project_id, room.role_id),
+            ),
             "messages": [
                 message_to_dict(
                     m,

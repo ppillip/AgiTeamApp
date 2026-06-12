@@ -2,9 +2,11 @@
 
 설계: DS-20 §13 (접근 경계·렌더 경계), DS-40 §16~18, DS-60 §11.
 보안 필수:
-- allowlist 루트 = documents/products/AgiTeamApp/ (DS-20 §13.1)
+- allowlist 루트 = <project_root>/documents (QI-WG-024 정밀화, DS-20 §13.1).
+  루트는 생성자 인자로 주입되며(_svc()=settings.artifacts_root_for(pid)), documents/ 전체가
+  허용 범위다(reports/·products/ 등 모든 하위 포함). 아래 display_root 기본값은 fallback 표기일 뿐.
 - traversal/절대경로/symlink escape/숨김·secret 차단 (DS-20 §13.2, DS-40 §16.4)
-- system/AgiTeamBuilder/ 접근 차단
+- 루트(=documents) 밖 상위 경로 접근 차단
 - 응답/로그에 host 절대경로·파일본문(차단 시) 노출 금지
 
 DB 미사용: 트리/메타/본문/렌더 입력은 매 요청 파일시스템에서 직접 읽는다 (DS-30 §10).

@@ -173,6 +173,8 @@ function handleWsEvent(ev) {
   }
   if (type === "room_upserted") return upsertRoomEvent(data.room || data);
   if (type === "room_connection_changed") return applyRoomConnection(data.room || data);
+  // 런타임 활동 변경(요구사항 15-1): 연결상태(liveness) 위에 얹는 2차원(active/idle).
+  if (type === "runtime_activity_changed") return applyRuntimeActivity(data.room || data);
   // message 계열: update envelope({update_type,room_id,message}) 형태로 정규화 후 머지
   if (type.indexOf("message") === 0 || data.message) {
     const update = data.update_type
@@ -221,6 +223,21 @@ function applyRoomConnection(raw) {
   if (!r) return;
   if (raw.connection_state) r.connectionState = raw.connection_state;
   if (raw.runtime_state) r.runtimeState = raw.runtime_state;
+}
+
+// 런타임 활동 변경(요구사항 15-1, 아테나 인터페이스): runtime_activity_changed WS 이벤트 1건을
+// 방에 반영한다. payload: { project_id, role, runtime_activity(active|idle|unknown),
+//   from_activity, ts, reason, offset_start/end, chunk_bytes, ... } — 카드 표시엔 runtime_activity 만 사용.
+// 매칭: role + project_id(+ room_id). 연결상태와 독립 차원이므로 runtimeActivity 만 갱신한다.
+function applyRuntimeActivity(raw) {
+  if (!raw) return;
+  // 스코프 가드(이중 방어): 타 프로젝트 이벤트 무시(handleWsEvent 에서 1차 필터되나 안전망).
+  if (raw.project_id && store.selectedProjectId && raw.project_id !== store.selectedProjectId) return;
+  const r = store.rooms.find(
+    (x) => x.roomId === raw.room_id || (x.projectId === raw.project_id && x.role === raw.role)
+  );
+  if (!r) return;
+  if (raw.runtime_activity) r.runtimeActivity = raw.runtime_activity; // active | idle | unknown
 }
 
 // rooms 재조회 결과를 기존 목록에 머지(연결상태/last 갱신 + 신규 방 추가) — polling 폴백용
@@ -534,10 +551,19 @@ function applyArtifactChange(data) {
   // 2) 삭제된 디렉토리면 트리 보조 상태(펼침/자식 캐시) 잔여 정리
   if (plan.purge) purgeSubtree(plan.path);
 
-  // 3) 변경 노드를 나열하는 디렉토리가 화면에 보이면 그 디렉토리만 재요청
-  //    (created/modified/deleted 모두 디렉토리 재조회로 일괄 반영 — 추가·갱신·제거 동시 처리)
-  //    refreshDir === null 이면 보이지 않는 노드 → 즉시 재요청하지 않음(다음 펼침 때 최신).
+  // 3) 트리 노드 동기화(13-3): 변경 노드를 나열하는 디렉토리 갱신.
+  //    - refreshDir(보임): 그 디렉토리만 즉시 재요청 — created 새 노드/deleted 제거 즉시 반영.
+  //    - staleDir(접힘+구성변경): stale 자식 캐시 무효화 → 다음 펼침(toggleFolder)에서 최신 로드.
+  //      (이 무효화가 없으면 toggleFolder 가 stale 캐시로 재요청을 건너뛰어 새 파일이 영영 안 보임)
   if (plan.refreshDir !== null) refreshDirIfVisible(plan.refreshDir);
+  else if (plan.staleDir) invalidateDirCache(plan.staleDir);
+}
+
+// 접힌 디렉토리의 stale 자식 캐시를 비워, 다음 펼침에서 fetchTree 로 재조회되게 한다.
+// (created/deleted 로 children 구성이 바뀌었으나 화면에 보이지 않아 즉시 재조회하지 않는 경우)
+function invalidateDirCache(dirPath) {
+  if (!dirPath) return;
+  if (store.childrenCache[dirPath]) delete store.childrenCache[dirPath];
 }
 
 // 펼침/자식 캐시에서 path 및 그 하위 경로 키를 제거(삭제된 디렉토리 잔여 정리)

@@ -51,7 +51,11 @@ export function planArtifactChange(data, view) {
   }
   const path = data.path;
   const changeType = data.change_type || data.kind || null; // BE 는 change_type, kind 표기도 관용 수용
-  const parent = data.parent_path != null ? data.parent_path : parentOf(path);
+  // parent_path 를 신뢰하되, path 와 정합하지 않으면(접두 불일치) path 에서 유도한다.
+  // BE parent_path 형식이 트리 노드 path 와 다르면(절대경로 등) expanded/childrenCache 키
+  // 매칭이 깨져, 펼쳐진 부모인데도 재조회를 건너뛰어 created 새 노드가 트리에 반영되지 않는다(13-3 회귀).
+  let parent = data.parent_path != null ? data.parent_path : parentOf(path);
+  if (parent && !path.startsWith(parent + "/")) parent = parentOf(path);
 
   let viewer = null;
   if (v.viewerOpen && v.viewerPath === path) {
@@ -64,5 +68,12 @@ export function planArtifactChange(data, view) {
   const expanded = v.expanded || {};
   const refreshDir = isRoot ? "" : expanded[parent] ? parent : null;
 
-  return { ignore: false, path, parent, changeType, viewer, purge, refreshDir };
+  // created/deleted 는 부모 디렉토리의 children 구성을 바꾼다. 부모가 접혀 있어 즉시 재조회
+  // 대상이 아닐 때(refreshDir===null), 그 부모의 stale 자식 캐시를 무효화해야 다음 펼침에서
+  // 최신 목록(새 노드 포함/삭제 노드 제외)을 받는다(DS-40 §10.4 "다음 펼침 때 최신" 보장).
+  // modified 는 children 구성이 그대로이므로 무효화 불필요.
+  const dirChanged = changeType === "created" || changeType === "deleted";
+  const staleDir = refreshDir === null && dirChanged ? parent || null : null;
+
+  return { ignore: false, path, parent, changeType, viewer, purge, refreshDir, staleDir };
 }

@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     artifact_hard_flush_seconds: float = 1.0      # burst hard flush 1000ms
     artifact_buffer_ttl_seconds: int = 600        # WG-ART-04 ring buffer TTL 10분
     artifact_buffer_min_keep: int = 1000          # 프로젝트별 최소 보존 건수
+    # 에이전트 동작중/조용함 liveness (요구사항 15-1, DS-30 runtime_activity_changed).
+    # role.log offset 증가 → active 즉시 전환. 무출력 idle_seconds 경과 → idle 전환(펄럭임 방지).
+    # 기본 6초 = rawlog 폴링(logtail_poll_seconds=2s) × 3회.
+    activity_idle_seconds: float = 6.0
 
     # 이미지 첨부 업로드 (DV-90 / DS-120). 저장 root = <project_root>/.agiteam/webgui/uploads/images
     attachment_max_bytes: int = 10 * 1024 * 1024  # 파일당 10 MiB

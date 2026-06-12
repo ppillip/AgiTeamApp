@@ -25,6 +25,7 @@ class RoomSummary(BaseModel):
     agent_session_id: str | None = None
     ready_state: str
     collector_state: str
+    runtime_activity: str = "unknown"   # active | idle | unknown (요구사항 15-1)
     last_message: LastMessage | None = None
     last_message_at: datetime | None = None
     read_marker_at: datetime | None = None

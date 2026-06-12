@@ -103,6 +103,7 @@ def room_summary_dict(
     collector_state: str = "unknown",
     *,
     connection_state: str | None = None,
+    runtime_activity: str = "unknown",
 ) -> dict[str, Any]:
     runtime_state = _room_runtime_state(r, connection_state)
     last_source = last.source if last is not None else None
@@ -121,6 +122,8 @@ def room_summary_dict(
         "ready_state": r.ready_state,
         "collector_state": collector_state,
         "runtime_state": runtime_state,
+        # 동작중/조용함 (요구사항 15-1). cmux 연결(runtime_state)과 직교한 별도 축.
+        "runtime_activity": runtime_activity,
         "provenance": provenance_dict(last_source, runtime_state=runtime_state),
         "last_message": last_message_dict(last) if last is not None else None,
         "last_message_at": r.last_message_at,

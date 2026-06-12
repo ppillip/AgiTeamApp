@@ -230,6 +230,19 @@ const provRooms = adaptRooms({
 });
 ok(provRooms[0].runtimeState === "disconnected" && provRooms[0].provSource === "transcript" && provRooms[0].isMock === false, "room: provenance/runtime_state 흡수");
 
+// 런타임 활동(요구사항 15-1): runtime_activity 매핑 + 기본값 unknown
+const actRooms = adaptRooms({
+  rooms: [
+    { room_id: "ra", project_id: "P", role: "DeveloperFE", room_type: "role", connection_state: "connected", runtime_activity: "active" },
+    { room_id: "rb", project_id: "P", role: "Designer", room_type: "role", connection_state: "connected", runtime_activity: "idle" },
+    { room_id: "rc", project_id: "P", role: "DevOps", room_type: "role", connection_state: "connected" }, // 필드 없음 → unknown
+  ],
+});
+const byRole = (rl) => actRooms.find((r) => r.role === rl);
+ok(byRole("DeveloperFE").runtimeActivity === "active", "room: runtime_activity active 매핑");
+ok(byRole("Designer").runtimeActivity === "idle", "room: runtime_activity idle 매핑");
+ok(byRole("DevOps").runtimeActivity === "unknown", "room: runtime_activity 기본값 unknown");
+
 // ── 산출물 실시간 갱신 매핑 (DV-71, DS-40 §10.4 / DS-60 §8.4) ──────────
 // parentOf
 ok(parentOf("04.development/02.설계/DS-40.md") === "04.development/02.설계", "art: parentOf 중첩");
@@ -309,6 +322,56 @@ ok(planArtifactChange({ project_id: "Panthea", change_type: "modified" }, VIEW()
     VIEW({ expanded: { "docs/sub": true } })
   );
   ok(p.parent === "docs/sub" && p.refreshDir === "docs/sub", "art: parent_path 누락 → path 에서 유도");
+}
+
+// ── 13-3 트리 동기화 결함 수정(긴급): created/deleted 노드 반영 ──────────
+// created + 부모 접힘 → 즉시 재조회는 안 하되(refreshDir=null), stale 캐시 무효화 신호(staleDir=parent)
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "reports/new.html", change_type: "created", parent_path: "reports" },
+    VIEW({ expanded: {} }) // reports 접힘
+  );
+  ok(p.refreshDir === null && p.staleDir === "reports", "13-3: created+부모접힘 → staleDir 무효화");
+}
+// created + 부모 펼침 → 즉시 재조회(refreshDir=parent), 무효화 불필요
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "reports/new.html", change_type: "created", parent_path: "reports" },
+    VIEW({ expanded: { reports: true } })
+  );
+  ok(p.refreshDir === "reports" && p.staleDir === null, "13-3: created+부모펼침 → 즉시 재조회");
+}
+// deleted + 부모 접힘 → staleDir 무효화(삭제 노드 제거가 다음 펼침에 반영되도록)
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "reports/old.html", kind: "deleted", parent_path: "reports" },
+    VIEW({ expanded: {} })
+  );
+  ok(p.staleDir === "reports" && p.purge === true, "13-3: deleted+부모접힘 → staleDir 무효화");
+}
+// modified + 부모 접힘 → children 구성 불변 → staleDir 없음(불필요한 무효화 금지)
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "reports/x.html", change_type: "modified", parent_path: "reports" },
+    VIEW({ expanded: {} })
+  );
+  ok(p.refreshDir === null && p.staleDir === null, "13-3: modified+부모접힘 → 무효화 안 함");
+}
+// 루트 직하 created → refreshDir=""(즉시), staleDir 없음
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "root-new.md", change_type: "created", parent_path: "" },
+    VIEW()
+  );
+  ok(p.refreshDir === "" && p.staleDir === null, "13-3: 루트 created → 즉시, staleDir 없음");
+}
+// parent_path 가 path 와 형식 불일치(절대경로) → path 기준 parent 교정(트리 키 정합)
+{
+  const p = planArtifactChange(
+    { project_id: "Panthea", path: "reports/new.html", change_type: "created", parent_path: "/abs/documents/reports" },
+    VIEW({ expanded: { reports: true } })
+  );
+  ok(p.parent === "reports" && p.refreshDir === "reports", "13-3: parent_path 절대경로 → path 기준 교정");
 }
 
 // ── UI-10 폴더 전파(요구사항 17-2): folderHasUnseenChange ──────────

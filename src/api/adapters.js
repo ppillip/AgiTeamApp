@@ -117,7 +117,10 @@ export function adaptRoom(r) {
   const roomType = r.room_type || (role === "PM" ? "pm" : "role");
   const last = r.last_message || null;
   const prov = r.provenance || {};
-  const provSource = prov.source || r.source || null;
+  // 백엔드 room provenance 는 출처를 `origin` 키로 보낸다(메시지는 top-level source 도 동봉).
+  // source(구 키) → origin(현행 키) → 평면 source 순으로 방어적 흡수. 이 누락이 provSource=null →
+  // 팀뷰 출처배지가 연결축과 같은 'LIVE' 로 폴백되던 중복(LIVE 2개)의 근인이었다.
+  const provSource = prov.source || prov.origin || r.source || null;
   const isMock = r.is_mock === true || prov.kind === "mock" || provSource === "mock";
   const runtimeState = r.runtime_state || prov.runtime_state || "unknown";
   return {
@@ -129,6 +132,9 @@ export function adaptRoom(r) {
     mono: monogram(r.display_name, role),
     connectionState: r.connection_state || "unknown",
     runtimeState, // live | disconnected | mock | unknown (DS-60 §4.4)
+    // 런타임 활동(요구사항 15-1): 에이전트가 실시간으로 출력을 내는지(연결상태 위 2차원).
+    //   active | idle | unknown. REST runtime_activity 매핑, WS runtime_activity_changed 로 실시간 갱신.
+    runtimeActivity: r.runtime_activity || "unknown",
     readyState: r.ready_state || "unknown",
     collectorState: r.collector_state || "unknown",
     // provenance (DS-60 §6.1) — 방 단위 출처/신뢰

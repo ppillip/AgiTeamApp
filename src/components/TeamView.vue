@@ -135,16 +135,35 @@ export default {
     statusClass(tone) {
       return STATUS_CLASS[tone] || STATUS_CLASS.off;
     },
-    // 데이터 출처 배지(provenance): hook/transcript=실데이터, mock/끊김 명시
+    // 런타임 활동 2차 인디케이터(요구사항 15-1). 연결됨일 때만 'LIVE' 위에 얹는다.
+    //   active → '동작중'(초록 점 pulse) · idle → '조용함'(연녹 정적 점)
+    //   disconnected/mock → null(끊김·MOCK 만 표시) · unknown → null(LIVE 만)
+    // ⚠️ 문구 규칙(불가침): '작업중'·'대기' 금지 — '동작중'·'조용함'만.
+    cardActivity(r) {
+      if (store.degraded || r.connectionState !== "connected") return null;
+      if (r.runtimeActivity === "active") return { label: "동작중", active: true };
+      if (r.runtimeActivity === "idle") return { label: "조용함", active: false };
+      return null; // unknown → LIVE 만
+    },
+    // 데이터 출처 배지(provenance): hook/transcript=실데이터, mock/끊김 명시.
+    // ⚠️ 헤더 연결축이 이미 'LIVE' 를 표시하므로, 출처배지는 'LIVE ' 접두를 떼고
+    //    출처만(TRANSCRIPT/HOOK/SENT/MANUAL/DIAGNOSTIC) 표기해 한 카드에 'LIVE' 가
+    //    두 번 나오지 않게 한다(연결축 LIVE ↔ 데이터출처 = 의미 분리).
     roomSource(r) {
       if (store.degraded || r.isMock) return { label: "MOCK", real: false };
       if (r.provSource) {
         const p = provenanceInfo(r.provSource);
-        return { label: p.label || r.provSource.toUpperCase(), real: p.real };
+        const label = (p.label || r.provSource.toUpperCase()).replace(/^LIVE\s+/, "");
+        // TRANSCRIPT 칩은 표시하지 않음(유저 요청 2026-06-12): 연결축 'LIVE' 로 충분하고,
+        // 출처가 transcript 인 방이 사실상 전부라 카드마다 'TRANSCRIPT' 가 상시 떠 오인 유발.
+        // 다른 출처(HOOK/SENT/MANUAL/DIAGNOSTIC) 라벨은 그대로 표시한다.
+        if (label === "TRANSCRIPT") return null;
+        return { label, real: p.real };
       }
+      // 출처 미상 폴백: 연결축('LIVE')과 중복 방지 — 'LIVE' 라벨을 쓰지 않는다.
       return r.connectionState === "connected"
-        ? { label: "LIVE", real: true }
-        : { label: "DISCONNECTED", real: false };
+        ? { label: "실데이터", real: true }
+        : { label: "끊김", real: false };
     },
     previewOf(roomId) {
       const list = store.roomPreviews[roomId] || [];
@@ -198,19 +217,19 @@ export default {
         <header class="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line-soft p-4">
           <div class="grid h-[52px] w-[52px] place-items-center rounded-[15px] bg-amber text-[15px] font-black text-white">PM</div>
           <div class="min-w-0">
+            <!-- 역할명 칩 제거: 좌측 아바타 'PM' 이니셜이 이미 역할 표기 → 중복 방지. -->
             <div class="flex min-w-0 items-center gap-1.5">
-              <span class="flex-shrink-0 rounded-[7px] bg-amber-tint px-1.5 py-[3px] text-[11px] font-black text-amber-600">{{ roleLabel(pmRoom.role) }}</span>
               <span class="truncate text-[18px] font-extrabold">{{ pmRoom.displayName }}</span>
             </div>
             <div class="mt-1 truncate text-[12.5px] font-semibold text-ink-500">{{ subtitle(pmRoom.role) }}</div>
           </div>
           <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :class="statusClass(roomStatus(pmRoom).tone)">
-            <span class="h-1.5 w-1.5 rounded-full bg-current"></span>{{ roomStatus(pmRoom).label }}
+            <span class="h-1.5 w-1.5 rounded-full" :class="cardActivity(pmRoom) ? (cardActivity(pmRoom).active ? 'bg-current animate-pulse' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(pmRoom).label }}<template v-if="cardActivity(pmRoom)"> · {{ cardActivity(pmRoom).label }}</template>
           </span>
         </header>
         <div class="flex items-center justify-between gap-2 px-4 pt-2.5 text-[11.5px] font-bold text-ink-500">
           <span>마지막 응답 {{ lastAtOf(pmRoom) || "—" }}</span>
-          <span class="rounded-md border px-1.5 py-0.5 text-[10px] font-black"
+          <span v-if="roomSource(pmRoom)" class="rounded-md border px-1.5 py-0.5 text-[10px] font-black"
                 :class="roomSource(pmRoom).real ? 'border-grn-tintbd bg-grn-tint text-grn-700' : 'border-line bg-line-soft text-ink-500'">{{ roomSource(pmRoom).label }}</span>
         </div>
         <!-- PM 스레드(실시간) — 로드 시 하단, 새 메시지 자동 추적 -->
@@ -244,19 +263,20 @@ export default {
           <header class="grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-line-soft px-[13px] pb-[11px] pt-[13px]">
             <div class="grid h-10 w-10 place-items-center rounded-xl bg-amber-tint text-[13px] font-black text-amber-600">{{ abbr(r.role) }}</div>
             <div class="min-w-0">
+              <!-- 역할명 칩 제거: 좌측 아바타 이니셜(abbr)이 이미 역할을 표기 → 중복 방지.
+                   이름 줄은 별칭(displayName)만, 역할 설명은 아래 subtitle 이 담당. -->
               <div class="flex min-w-0 items-center gap-1.5">
-                <span class="max-w-[120px] flex-shrink-0 truncate rounded-[7px] bg-amber-tint px-1.5 py-[3px] text-[11px] font-black text-amber-600">{{ r.role }}</span>
                 <span class="truncate text-[15px] font-extrabold">{{ r.displayName }}</span>
               </div>
               <div class="mt-1 truncate text-[11.5px] font-semibold text-ink-500">{{ subtitle(r.role) }}</div>
             </div>
             <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :class="statusClass(roomStatus(r).tone)">
-              <span class="h-1.5 w-1.5 rounded-full bg-current"></span>{{ roomStatus(r).label }}
+              <span class="h-1.5 w-1.5 rounded-full" :class="cardActivity(r) ? (cardActivity(r).active ? 'bg-current animate-pulse' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(r).label }}<template v-if="cardActivity(r)"> · {{ cardActivity(r).label }}</template>
             </span>
           </header>
           <div class="flex items-center justify-between gap-2 px-[13px] pt-2.5 text-[11.5px] font-bold text-ink-500">
             <span>마지막 응답 {{ lastAtOf(r) || "—" }}</span>
-            <span class="rounded-md border px-1.5 py-0.5 text-[10px] font-black"
+            <span v-if="roomSource(r)" class="rounded-md border px-1.5 py-0.5 text-[10px] font-black"
                   :class="roomSource(r).real ? 'border-grn-tintbd bg-grn-tint text-grn-700' : 'border-line bg-line-soft text-ink-500'">{{ roomSource(r).label }}</span>
           </div>
           <!-- 최근 말풍선(읽기전용) — 로드 시 하단, 새 메시지 자동 추적 -->
