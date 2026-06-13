@@ -27,6 +27,12 @@ _RENDER_MODE = {
     "markdown": "markdown",
     "pdf": "pdf_stream",
     "svg": "image",               # UI-07: SVG 이미지 표시 (FE ArtifactViewer 'image' 모드)
+    # 17-3: 래스터 이미지 표시 (FE ArtifactViewer 'image' 모드, <img src=stream_url>)
+    "png": "image",
+    "jpg": "image",
+    "jpeg": "image",
+    "gif": "image",
+    "webp": "image",
     "html": "html",               # UI-06: HTML 표시 (FE ArtifactViewer 'html' 샌드박스 iframe)
     "htm": "html",
     "pptx": "converted_preview",
@@ -37,11 +43,19 @@ _MIME = {
     "markdown": "text/markdown",
     "pdf": "application/pdf",
     "svg": "image/svg+xml",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
     "html": "text/html",
     "htm": "text/html",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+
+# 17-3: 래스터 이미지 확장자 집합 (svg 는 텍스트라 별도 취급)
+_RASTER_EXTS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 
 # 숨김/secret 후보 (DS-20 §13.2, DS-40 §16.3). secret 은 include_hidden 여도 차단.
 _SECRET_NAME = re.compile(
@@ -304,6 +318,26 @@ class ArtifactService:
                         return None
                 except OSError:
                     return None
+            # 17-3: 래스터 이미지 매직 시그니처 검증 (확장자 위조 차단)
+            if ext in _RASTER_EXTS:
+                try:
+                    with open(abs_path, "rb") as f:
+                        head = f.read(16)
+                except OSError:
+                    return None
+                if ext == "png":
+                    if not head.startswith(b"\x89PNG\r\n\x1a\n"):
+                        return None
+                elif ext in ("jpg", "jpeg"):
+                    if not head.startswith(b"\xff\xd8\xff"):
+                        return None
+                elif ext == "gif":
+                    if not (head.startswith(b"GIF87a") or head.startswith(b"GIF89a")):
+                        return None
+                elif ext == "webp":
+                    # RIFF<4byte size>WEBP
+                    if not (head[:4] == b"RIFF" and head[8:12] == b"WEBP"):
+                        return None
             return ext
         return None
 
@@ -372,20 +406,25 @@ class ArtifactService:
             return {"file": base, "status": 200}
 
         if render_mode == "image":
-            # UI-07: SVG 표시. <img src=stream_url> 로 안전 렌더(이미지로 로드 시 스크립트 비실행).
-            # inline content 도 함께 제공하되 script/on*/javascript: 를 무력화(defense-in-depth).
             from urllib.parse import quote
 
             base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
-            if size <= max_inline_bytes:
-                text = rp.abs_path.read_text(encoding="utf-8", errors="replace")
-                if sanitize:
-                    text, warnings = sanitize_markdown(text)
-                    base["sanitized"] = True
-                    base["render_warnings"] = warnings
-                base["content"] = text
-                base["encoding"] = "utf-8"
-            base["content_type"] = "image/svg+xml"
+            if fmt == "svg":
+                # UI-07: SVG 표시. <img src=stream_url> 로 안전 렌더(이미지로 로드 시 스크립트 비실행).
+                # inline content 도 함께 제공하되 script/on*/javascript: 를 무력화(defense-in-depth).
+                if size <= max_inline_bytes:
+                    text = rp.abs_path.read_text(encoding="utf-8", errors="replace")
+                    if sanitize:
+                        text, warnings = sanitize_markdown(text)
+                        base["sanitized"] = True
+                        base["render_warnings"] = warnings
+                    base["content"] = text
+                    base["encoding"] = "utf-8"
+                base["content_type"] = "image/svg+xml"
+            else:
+                # 17-3: png/jpg/jpeg/gif/webp 래스터 이미지 — 바이너리이므로 inline content 없이
+                # stream_url 로만 서빙(<img src=stream_url>). content_type 은 정확한 image/* 로 내린다.
+                base["content_type"] = mime
             return {"file": base, "status": 200}
 
         if render_mode == "html":

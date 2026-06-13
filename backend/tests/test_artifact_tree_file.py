@@ -182,3 +182,96 @@ def test_pdf_signature_mismatch_unsupported(svc, art_root):
     with pytest.raises(WebguiError) as ei:
         svc.read_file("fake.pdf")
     assert ei.value.code == "unsupported_media_type"
+
+
+# --- 17-3: 래스터 이미지 (png/jpg/jpeg/gif/webp) -----------------------------
+
+# 각 형식 최소 유효 매직 시그니처 바이트
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 8
+_GIF = b"GIF89a" + b"\x00" * 10
+_WEBP = b"RIFF" + b"\x24\x00\x00\x00" + b"WEBP" + b"VP8 " + b"\x00" * 8
+
+_RASTER_CASES = [
+    ("pic.png", _PNG, "image/png"),
+    ("pic.jpg", _JPEG, "image/jpeg"),
+    ("pic.jpeg", _JPEG, "image/jpeg"),
+    ("pic.gif", _GIF, "image/gif"),
+    ("pic.webp", _WEBP, "image/webp"),
+]
+
+
+@pytest.mark.parametrize("name,data,mime", _RASTER_CASES)
+def test_read_raster_image_mode(svc, art_root, name, data, mime):
+    (art_root / name).write_bytes(data)
+    r = svc.read_file(name)
+    f = r["file"]
+    assert r["status"] == 200
+    assert f["render_mode"] == "image"
+    assert f["mime_type"] == mime
+    assert f["content_type"] == mime
+    assert f["stream_url"] is not None      # <img src=stream_url> 렌더 경로
+    assert f["content"] is None             # 바이너리 — inline 본문 미제공
+    assert f["encoding"] is None
+
+
+@pytest.mark.parametrize("name,data,mime", _RASTER_CASES)
+def test_raster_tree_node_renderable(svc, art_root, name, data, mime):
+    (art_root / name).write_bytes(data)
+    data_tree = svc.list_tree("", depth=1)
+    node = next(c for c in data_tree["node"]["children"] if c["name"] == name)
+    assert node["renderable"] is True
+    assert node["mime_type"] == mime
+
+
+@pytest.mark.parametrize("name", ["fake.png", "fake.jpg", "fake.jpeg", "fake.gif", "fake.webp"])
+def test_raster_signature_rejects_forged_ext(svc, art_root, name):
+    # 확장자만 이미지이고 실제 매직 시그니처가 아니면 거부 (위조 차단)
+    (art_root / name).write_bytes(b"this is definitely not an image file")
+    with pytest.raises(WebguiError) as ei:
+        svc.read_file(name)
+    assert ei.value.code == "unsupported_media_type"
+
+
+def test_raster_webp_requires_webp_tag(svc, art_root):
+    # RIFF 컨테이너지만 WEBP 태그가 아니면(예: WAV) 거부
+    (art_root / "audio.webp").write_bytes(b"RIFF" + b"\x24\x00\x00\x00" + b"WAVE" + b"\x00" * 8)
+    with pytest.raises(WebguiError) as ei:
+        svc.read_file("audio.webp")
+    assert ei.value.code == "unsupported_media_type"
+
+
+@pytest.mark.parametrize("name,data,mime", _RASTER_CASES)
+def test_stream_raster_image_endpoint(client, art_root, name, data, mime):
+    # 스트림 엔드포인트가 200 + 정확한 image/* content-type 으로 바이너리 응답
+    (art_root / name).write_bytes(data)
+    r = client.get("/api/webgui/artifacts/file/stream", params={"path": name})
+    assert r.status_code == 200
+    assert r.headers["content-type"].split(";")[0] == mime
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.content == data
+
+
+def test_stream_raster_traversal_blocked(client):
+    # 경로 traversal 차단 (스트림 경로에도 동일 적용)
+    r = client.get("/api/webgui/artifacts/file/stream", params={"path": "../../etc/passwd"})
+    assert r.status_code == 403
+
+
+def test_stream_forged_png_blocked(client, art_root):
+    # 위조 시그니처는 스트림 단계에서도 거부 (open_stream → detect_format)
+    (art_root / "evil.png").write_bytes(b"not a png at all")
+    r = client.get("/api/webgui/artifacts/file/stream", params={"path": "evil.png"})
+    assert r.status_code == 415
+
+
+def test_svg_inline_regression_still_text(svc, art_root):
+    # 회귀: svg 는 여전히 텍스트 inline content + image/svg+xml 로 동작
+    (art_root / "diag.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>', encoding="utf-8"
+    )
+    f = svc.read_file("diag.svg")["file"]
+    assert f["render_mode"] == "image"
+    assert f["content_type"] == "image/svg+xml"
+    assert "<svg" in (f["content"] or "")
+    assert f["encoding"] == "utf-8"
