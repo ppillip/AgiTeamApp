@@ -534,9 +534,18 @@ function applyArtifactChange(data) {
   });
   if (plan.ignore) return;
 
-  // 0) 외부 수정 표식(WG-ART-06): created/modified 는 트리에서 파일명 강조 대상.
+  // 0) 외부 수정 표식(WG-ART-06): created/modified '파일' 만 트리에서 강조 대상.
   //    deleted 는 노드 자체가 사라지므로 강조 불필요.
-  if (plan.changeType === "modified" || plan.changeType === "created") {
+  //    디렉토리 변경 제외(결함 수정): 하위에 파일이 생성·변경되면 watcher 가 그 부모 디렉토리에도
+  //    modified/created 를 발행한다(실관측: 새 하위폴더 생성 시 "reports"(modified,directory) +
+  //    "reports/_fe_amber_test"(created,directory) 동반). 디렉토리 키는 openFile 로 해제할 길이
+  //    없어 externalChanges 에 영구 잔존하고, 그러면 그 디렉토리를 하위로 갖는 조상 폴더가
+  //    folderHasUnseenChange 의 prefix 매칭에 영구히 걸려 bold 로 남는다(하위 파일을 모두 열람해도
+  //    해제 안 됨). node_type 미동봉(unknown) 이벤트는 기존대로 마킹(파일 간주) — '디렉토리'만 제외.
+  if (
+    (plan.changeType === "modified" || plan.changeType === "created") &&
+    data.node_type !== "directory"
+  ) {
     markExternalChange(plan.path);
   }
 
