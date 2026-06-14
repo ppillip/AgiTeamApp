@@ -24,6 +24,9 @@ function previewText(s) {
 export default {
   name: "ConversationList",
   components: { Icon },
+  // select: 방을 클릭할 때마다(같은 방 재클릭 포함) 발생 → 부모(App)가 산출물 크게보기(artifactBig)를
+  //   해제해 가운데를 그 방 대화뷰로 되돌린다(UI-02). 방 전환 자체는 아래 selectRoom 이 담당.
+  emits: ["select"],
   computed: {
     store: () => store,
     rooms() {
@@ -37,6 +40,9 @@ export default {
     roleLabel,
     previewText,
     pick(room) {
+      // 클릭 시 항상 부모에 알림(같은 방 재클릭도 대화뷰 복귀 필요 — artifactBig 해제 트리거).
+      this.$emit("select", room.roomId);
+      // 방 전환은 다른 방일 때만(같은 방 재로드 방지). 같은 방이면 selectedRoomId 유지 → 대화 그대로.
       if (room.roomId !== store.selectedRoomId) selectRoom(room.roomId);
     },
     // 방 연결 상태 → {label, tone} (DS-60 §4.4). 연결 표식은 connection_state 기준 3종:

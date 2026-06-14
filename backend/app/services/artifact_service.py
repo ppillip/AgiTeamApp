@@ -348,6 +348,7 @@ class ArtifactService:
         prefer: str = "inline",
         sanitize: bool = True,
         max_inline_bytes: int = 1_048_576,
+        root_type: str | None = None,
     ) -> dict:
         rp = self.resolve(raw_path)
         if not rp.abs_path.exists():
@@ -368,6 +369,11 @@ class ArtifactService:
 
         render_mode = _RENDER_MODE[fmt]
         mime = _MIME[fmt]
+
+        # stream/converted URL 은 같은 root 로 재해소되어야 한다(documents/system/persona 불일치 방지).
+        # documents 외(system·persona 등)일 때만 쿼리에 부착(미지정/documents 는 하위호환 위해 생략).
+        _rt = (root_type or "").strip().lower()
+        stream_root_qs = f"&root_type={_rt}" if _rt and _rt != "documents" else ""
 
         base = {
             "path": rp.rel_path,
@@ -402,13 +408,13 @@ class ArtifactService:
         if render_mode == "pdf_stream":
             from urllib.parse import quote
 
-            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
+            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}{stream_root_qs}"
             return {"file": base, "status": 200}
 
         if render_mode == "image":
             from urllib.parse import quote
 
-            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
+            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}{stream_root_qs}"
             if fmt == "svg":
                 # UI-07: SVG 표시. <img src=stream_url> 로 안전 렌더(이미지로 로드 시 스크립트 비실행).
                 # inline content 도 함께 제공하되 script/on*/javascript: 를 무력화(defense-in-depth).
@@ -433,7 +439,7 @@ class ArtifactService:
             # (iframe srcdoc 직접 주입 시 XSS 위험 — FE 는 src 로 로드하고 sandbox 적용).
             from urllib.parse import quote
 
-            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}"
+            base["stream_url"] = f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}{stream_root_qs}"
             base["content_type"] = "text/html; charset=utf-8"
             return {"file": base, "status": 200}
 
@@ -444,7 +450,7 @@ class ArtifactService:
         base["content_type"] = "text/html; charset=utf-8"
         base["encoding"] = "utf-8"
         base["converted_url"] = (
-            f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}&variant=preview"
+            f"/api/webgui/artifacts/file/stream?path={quote(rp.rel_path)}&variant=preview{stream_root_qs}"
         )
         base["sanitized"] = True
         base["render_warnings"] = ["conversion_pending"]

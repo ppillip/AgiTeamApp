@@ -93,9 +93,11 @@ export function messageStreamUrl(projectId, roomId, after) {
 
 // WG-ART-01 — 트리(1단계, lazy). project_id 를 반드시 실어 선택 프로젝트의 documents 를 조회한다.
 // (미전달 시 백엔드가 settings.project_id 기본값으로 fallback → 프로젝트 전환해도 같은 트리. QI-WG-024)
-export async function fetchTree(path, { depth = 1, projectId } = {}) {
+// rootType(documents|system): 산출물(documents) ↔ 코드(system) 탭 전환. 미지정 시 BE 기본=documents.
+export async function fetchTree(path, { depth = 1, projectId, rootType } = {}) {
   const data = await http.get(`${P}/artifacts/tree`, {
     project_id: projectId || undefined,
+    root_type: rootType || undefined,
     path: path || undefined,
     depth,
     include_files: true,
@@ -103,18 +105,24 @@ export async function fetchTree(path, { depth = 1, projectId } = {}) {
   return { root: data.root, path: data.path, node: adaptNode(data.node) };
 }
 
-// WG-ART-02 — 파일 메타·내용 (선택 프로젝트 기준)
-export async function fetchFile(path, { prefer = "inline", projectId } = {}) {
-  const data = await http.get(`${P}/artifacts/file`, { project_id: projectId || undefined, path, prefer });
+// WG-ART-02 — 파일 메타·내용 (선택 프로젝트 기준). rootType 으로 documents/system 구분.
+export async function fetchFile(path, { prefer = "inline", projectId, rootType } = {}) {
+  const data = await http.get(`${P}/artifacts/file`, {
+    project_id: projectId || undefined,
+    root_type: rootType || undefined,
+    path,
+    prefer,
+  });
   return adaptFile(data.file);
 }
 
 // WG-ART-05 — 산출물 파일 쓰기(MD 에디터 저장). 불칸 계약: POST /api/webgui/artifacts/write
 //   body: { project_id, path, content }. 성공 시 저장된 파일 메타(있으면)를 adaptFile 로 정규화해 반환.
 //   백엔드가 file 을 안 돌려줘도 호출부가 낙관적으로 content 를 반영하므로 { file:null } 도 정상.
-export async function writeFile(path, content, { projectId } = {}) {
+export async function writeFile(path, content, { projectId, rootType } = {}) {
   const data = await http.post(`${P}/artifacts/write`, {
     project_id: projectId || undefined,
+    root_type: rootType || undefined,
     path,
     content,
   });
@@ -122,8 +130,13 @@ export async function writeFile(path, content, { projectId } = {}) {
 }
 
 // WG-ART-03 — 스트림 URL (pdf iframe/embed 용, 선택 프로젝트 기준)
-export function fileStreamUrl(path, variant = "original", projectId) {
-  return apiUrl(`${P}/artifacts/file/stream`, { project_id: projectId || undefined, path, variant });
+export function fileStreamUrl(path, variant = "original", projectId, rootType) {
+  return apiUrl(`${P}/artifacts/file/stream`, {
+    project_id: projectId || undefined,
+    root_type: rootType || undefined,
+    path,
+    variant,
+  });
 }
 
 // WG-ART-04 — 산출물 변경 polling fallback (DS-40 §20). WebSocket(artifact_changed) 단절 중

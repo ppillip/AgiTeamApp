@@ -2,7 +2,14 @@
 import Icon from "./Icon.vue";
 import ArtifactTree from "./ArtifactTree.vue";
 import ArtifactViewer from "./ArtifactViewer.vue";
-import { store, loadTreeRoot } from "../stores/monitor.js";
+import { store, loadTreeRoot, setRootType } from "../stores/monitor.js";
+
+// 산출물 패널 상단 세그먼트 탭: 산출물(documents) ↔ 코드(system) ↔ 페르소나(persona, BE→brain).
+const ROOT_TABS = [
+  { key: "documents", label: "산출물" },
+  { key: "system", label: "코드" },
+  { key: "persona", label: "페르소나" },
+];
 
 // 우측 산출물 패널: 상단 트리(S-04) + 하단 뷰어(S-05).
 // UI-05: 트리↔뷰어 경계를 드래그해 세로 분할 높이 조절(localStorage 유지). UI-01 splitter 패턴 재사용.
@@ -16,17 +23,25 @@ export default {
   props: { treeOnly: { type: Boolean, default: false } },
   emits: ["expand"],
   data() {
-    return { treeH: 240, dragging: false, _startY: 0, _startH: 0, _panelH: 0 };
+    return { treeH: 240, dragging: false, _startY: 0, _startH: 0, _panelH: 0, rootTabs: ROOT_TABS };
   },
   computed: {
     store: () => store,
     rootChildren() {
       return store.treeRoot?.children || [];
     },
+    emptyLabel() {
+      if (store.rootType === "system") return "코드가 없습니다.";
+      if (store.rootType === "persona") return "페르소나가 없습니다.";
+      return "산출물이 없습니다.";
+    },
   },
   methods: {
     reload() {
       loadTreeRoot();
+    },
+    selectTab(key) {
+      setRootType(key); // 같은 탭이면 store 에서 no-op
     },
     startDrag(e) {
       this.dragging = true;
@@ -74,9 +89,18 @@ export default {
 
 <template>
   <aside class="flex h-full w-full flex-col overflow-hidden rounded-2xl border border-line bg-white">
-    <div class="flex items-center justify-between px-[18px] pb-3 pt-[18px]">
-      <h2 class="text-[16px] font-bold">산출물</h2>
-      <button @click="reload" class="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6] hover:text-ink-600" title="새로고침">
+    <div class="flex items-center justify-between gap-2 px-[18px] pb-3 pt-[18px]">
+      <!-- 산출물(documents) ↔ 코드(system) 세그먼트 탭. 패널 기존 톤(amber 강조) 유지. -->
+      <div class="flex items-center gap-0.5 rounded-lg bg-[#F4F4F6] p-0.5">
+        <button
+          v-for="tab in rootTabs"
+          :key="tab.key"
+          @click="selectTab(tab.key)"
+          :class="['rounded-md px-3 py-[5px] text-[13px] font-bold transition-colors',
+                   store.rootType === tab.key ? 'bg-white text-amber-600 shadow-sm' : 'text-ink-500 hover:text-ink-700']"
+        >{{ tab.label }}</button>
+      </div>
+      <button @click="reload" class="flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6] hover:text-ink-600" title="새로고침">
         <Icon name="refresh" :size="15" />
       </button>
     </div>
@@ -88,7 +112,7 @@ export default {
       :style="treeOnly ? null : { height: treeH + 'px' }"
     >
       <div v-if="store.treeLoading" class="px-2 py-3 text-[13px] text-ink-400">트리 불러오는 중…</div>
-      <div v-else-if="!rootChildren.length" class="px-2 py-3 text-[13px] text-ink-400">산출물이 없습니다.</div>
+      <div v-else-if="!rootChildren.length" class="px-2 py-3 text-[13px] text-ink-400">{{ emptyLabel }}</div>
       <ArtifactTree
         v-for="child in rootChildren"
         :key="child.path"

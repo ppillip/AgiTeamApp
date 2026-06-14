@@ -100,7 +100,7 @@ export default {
     // 선택 프로젝트 기준으로 항상 직접 구성(project_id 포함)한다.
     streamUrl() {
       if (!this.file) return null;
-      return fileStreamUrl(this.file.path, "original", store.selectedProjectId);
+      return fileStreamUrl(this.file.path, "original", store.selectedProjectId, store.rootType);
     },
     // html content(raw)를 주면 srcdoc 으로 안전 렌더(추가 요청 없음). 없으면 stream 으로.
     htmlSrcdoc() {

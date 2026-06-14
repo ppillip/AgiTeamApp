@@ -62,6 +62,9 @@ export const store = reactive({
   previewsLoading: false,
 
   // 산출물 트리
+  // rootType(문서 패널 탭): 'documents'(산출물) | 'system'(코드) | 'persona'(페르소나, BE→brain 매핑). 기본 documents.
+  //   탭 전환 시 트리/뷰어/보조상태 초기화 후 해당 root 를 재로드(setRootType).
+  rootType: "documents",
   treeRoot: null,
   treeLoading: false,
   expanded: {}, // path -> true
@@ -594,7 +597,7 @@ async function refreshDirIfVisible(dirPath) {
   const isRoot = dirPath === "" || dirPath == null;
   if (!isRoot && !store.expanded[dirPath]) return; // 미펼침 → skip
   try {
-    const { node } = await api.fetchTree(isRoot ? "" : dirPath, { depth: 1, projectId: pid });
+    const { node } = await api.fetchTree(isRoot ? "" : dirPath, { depth: 1, projectId: pid, rootType: store.rootType });
     if (store.selectedProjectId !== pid) return; // 그 사이 프로젝트 전환 → 폐기
     if (isRoot) store.treeRoot = node;
     else store.childrenCache[dirPath] = node.children || [];
@@ -608,7 +611,7 @@ async function reloadViewer(path) {
   if (store.degraded) return;
   const pid = store.selectedProjectId;
   try {
-    const file = await api.fetchFile(path, { prefer: "inline", projectId: pid });
+    const file = await api.fetchFile(path, { prefer: "inline", projectId: pid, rootType: store.rootType });
     if (store.viewer.open && store.viewer.path === path && store.selectedProjectId === pid) {
       store.viewer.file = file;
       store.viewer.error = null;
@@ -1037,13 +1040,29 @@ export async function loadTreeRoot() {
   }
   store.treeLoading = true;
   try {
-    const { node } = await api.fetchTree("", { depth: 1, projectId: store.selectedProjectId });
+    const { node } = await api.fetchTree("", { depth: 1, projectId: store.selectedProjectId, rootType: store.rootType });
     store.treeRoot = node;
   } catch (e) {
     store.treeRoot = null;
   } finally {
     store.treeLoading = false;
   }
+}
+
+// 문서 패널 탭 전환(산출물 documents ↔ 코드 system). 선택 프로젝트는 유지하되,
+// 트리·뷰어·펼침/캐시·외부변경 표식을 초기화(루트가 다르면 path 가 전혀 다르므로)한 뒤 새 root 로드.
+const ROOT_TYPES = ["documents", "system", "persona"];
+export async function setRootType(rootType) {
+  if (!ROOT_TYPES.includes(rootType)) return;
+  if (store.rootType === rootType) return;
+  store.rootType = rootType;
+  store.treeRoot = null;
+  store.expanded = {};
+  store.childrenCache = {};
+  store.childrenLoading = {};
+  store.externalChanges = {};
+  closeViewer();
+  await loadTreeRoot();
 }
 
 export async function toggleFolder(node) {
@@ -1061,7 +1080,7 @@ export async function toggleFolder(node) {
   }
   store.childrenLoading[path] = true;
   try {
-    const { node: loaded } = await api.fetchTree(path, { depth: 1, projectId: store.selectedProjectId });
+    const { node: loaded } = await api.fetchTree(path, { depth: 1, projectId: store.selectedProjectId, rootType: store.rootType });
     store.childrenCache[path] = loaded.children || [];
   } catch (e) {
     store.childrenCache[path] = [];
@@ -1099,7 +1118,7 @@ export async function openFile(node) {
   }
 
   try {
-    const file = await api.fetchFile(node.path, { prefer: "inline", projectId: store.selectedProjectId });
+    const file = await api.fetchFile(node.path, { prefer: "inline", projectId: store.selectedProjectId, rootType: store.rootType });
     store.viewer.file = file;
   } catch (e) {
     store.viewer.error = e instanceof ApiError ? e.message : "파일 열기 실패";
@@ -1125,7 +1144,7 @@ export async function saveArtifact(path, content) {
   }
   const pid = store.selectedProjectId;
   noteSelfWrite(path); // 저장 직전 등록(이후 watcher 의 같은 path 변경은 외부 강조 제외)
-  const { file } = await api.writeFile(path, content, { projectId: pid });
+  const { file } = await api.writeFile(path, content, { projectId: pid, rootType: store.rootType });
   // 저장 성공 → 현재 뷰어 파일 즉시 최신화. 서버가 파일 메타를 주면 그것으로, 아니면 content 만 반영.
   if (store.viewer.open && store.viewer.path === path && store.selectedProjectId === pid) {
     if (file) store.viewer.file = file;

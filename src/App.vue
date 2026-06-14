@@ -54,7 +54,14 @@ export default {
     // 전체 보기에서 방 카드 클릭 → 단일 방 보기로 진입(상세·페이지네이션)
     onOpenRoom(roomId) {
       this.viewMode = "single";
+      this.artifactBig = false; // 방 진입 시 산출물 크게보기 해제(가운데=대화뷰)
       selectRoom(roomId);
+    },
+    // 단일 모드 좌측 채팅방 클릭(같은 방 재클릭 포함, UI-02): 산출물 크게보기를 무조건 해제해
+    //   가운데를 그 방 대화뷰로 되돌린다. 우측 산출물 트리/탭 상태는 보존(다음에 다시 크게보기 가능).
+    //   방 전환 자체는 ConversationList 가 selectRoom 으로 수행.
+    onPickRoom(_roomId) {
+      this.artifactBig = false;
     },
     // 드래그 시작: 어느 경계(left|right)인지, 시작 X·시작 폭 기록 후 전역 리스너 부착.
     startDrag(side, e) {
@@ -206,7 +213,7 @@ export default {
     <div v-else-if="viewMode === 'single'" class="flex min-h-0 flex-1 overflow-x-auto p-[14px]">
       <!-- 좌: 채팅방 (가변폭) -->
       <div class="min-h-0 flex-shrink-0" :style="{ width: leftW + 'px' }">
-        <ConversationList />
+        <ConversationList @select="onPickRoom" />
       </div>
       <!-- 좌↔중 splitter -->
       <div

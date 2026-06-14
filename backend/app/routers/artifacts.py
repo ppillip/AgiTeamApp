@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from .. import errors
-from ..config import get_settings
+from ..config import ROOT_TYPE_SUBDIR, get_settings
 from ..deps import require_auth
 from ..schemas.artifact import ArtifactWriteRequest
 from ..schemas.common import ok
@@ -17,18 +17,38 @@ from ..services.artifact_service import ArtifactService
 
 router = APIRouter(prefix="/api/webgui/artifacts", tags=["artifacts"])
 
+# 코드탭/페르소나탭 추가(제우스 2026-06-14): 트리/파일 조회 root_type enum.
+# documents = 산출물 문서 트리(현행), system = 코드(소스) 트리, persona = brain(역할 페르소나) 트리.
+# 미지정/빈값 = documents(하위호환). 유효 값 집합은 config 매핑에서 파생 — 신규 탭 자동 동기화.
+_VALID_ROOT_TYPES = tuple(ROOT_TYPE_SUBDIR.keys())
 
-def _svc(request: Request, project_id: str | None = None) -> ArtifactService:
-    """project_id 별 산출물 root 로 ArtifactService 해소 (QI-WG-024).
+
+def _normalize_root_type(root_type: str | None) -> str:
+    """root_type 정규화·검증. 미지정/빈값 → documents(하위호환). 미지의 값 → invalid_request(400)."""
+    rt = (root_type or "").strip().lower()
+    if rt == "":
+        return "documents"
+    if rt not in _VALID_ROOT_TYPES:
+        raise errors.invalid_request(
+            f"root_type must be one of: {', '.join(_VALID_ROOT_TYPES)}",
+            details={"root_type": root_type},
+        )
+    return rt
+
+
+def _svc(request: Request, project_id: str | None = None, root_type: str | None = None) -> ArtifactService:
+    """project_id·root_type 별 산출물/코드 root 로 ArtifactService 해소 (QI-WG-024 + 코드탭).
 
     projects 엔드포인트와 동일한 project_root(project_id) 규약을 사용한다.
-    project_id 미지정 시 settings.project_id 로 fallback. allowlist/traversal 보안은
-    해소된 per-project root 기준으로 그대로 적용된다(다른 프로젝트·상위 escape 차단).
+    project_id 미지정 시 settings.project_id 로 fallback. root_type 미지정/빈값 = documents.
+    allowlist/traversal 보안은 해소된 per-project root(documents 또는 system) 기준으로 그대로
+    적용된다(다른 프로젝트·상위 escape·symlink escape 차단). system 루트도 동일 안전성.
     """
     settings = get_settings()
     pid = project_id or settings.project_id
-    root = settings.artifacts_root_for(pid)
-    display = settings.artifacts_display_root_for(pid)
+    rt = _normalize_root_type(root_type)
+    root = settings.artifacts_root_for(pid, rt)
+    display = settings.artifacts_display_root_for(pid, rt)
     return ArtifactService(root, display_root=display)
 
 
@@ -62,6 +82,7 @@ async def get_changes(
 async def get_tree(
     request: Request,
     project_id: str | None = Query(default=None),
+    root_type: str | None = Query(default=None),
     path: str | None = Query(default=None),
     depth: int = Query(default=1, ge=1),
     recursive: bool = Query(default=False),
@@ -71,7 +92,7 @@ async def get_tree(
 ):
     settings = get_settings()
     ext_list = [e.strip().lower() for e in extensions.split(",") if e.strip()] if extensions else None
-    data = _svc(request, project_id).list_tree(
+    data = _svc(request, project_id, root_type).list_tree(
         path,
         depth=depth,
         recursive=recursive,
@@ -89,6 +110,7 @@ async def write_artifact(
     request: Request,
     body: ArtifactWriteRequest,
     project_id: str | None = Query(default=None),
+    root_type: str | None = Query(default=None),
 ):
     """WG-ART-05 산출물 .md 저장.
 
@@ -96,7 +118,7 @@ async def write_artifact(
     ArtifactService.resolve() 가 GET 계열과 동일하게 적용한다(allowlist+traversal 차단).
     성공 200 {saved: true, path}, 경로 위반 403, .md 아님 400, 쓰기 실패 500.
     """
-    data = _svc(request, project_id).write_file(body.path, body.content)
+    data = _svc(request, project_id, root_type).write_file(body.path, body.content)
     return ok(data)
 
 
@@ -106,15 +128,17 @@ async def get_file(
     response: Response,
     path: str = Query(...),
     project_id: str | None = Query(default=None),
+    root_type: str | None = Query(default=None),
     prefer: str = Query(default="inline"),
     sanitize: bool = Query(default=True),
 ):
     settings = get_settings()
-    result = _svc(request, project_id).read_file(
+    result = _svc(request, project_id, root_type).read_file(
         path,
         prefer=prefer,
         sanitize=sanitize,
         max_inline_bytes=settings.max_inline_bytes,
+        root_type=_normalize_root_type(root_type),
     )
     response.status_code = result.get("status", 200)
     data = {"file": result["file"]}
@@ -128,6 +152,7 @@ async def stream_file(
     request: Request,
     path: str = Query(...),
     project_id: str | None = Query(default=None),
+    root_type: str | None = Query(default=None),
     variant: str = Query(default="original"),
 ):
     settings = get_settings()
@@ -135,7 +160,7 @@ async def stream_file(
         # pptx/docx 변환 preview 는 변환기 미구현 단계 -> render_pending (DS-40 §18.3)
         raise errors.WebguiError("render_pending", 202, "Conversion preview is not ready.")
 
-    abs_path, mime, size = _svc(request, project_id).open_stream(path, max_stream_bytes=settings.max_stream_bytes)
+    abs_path, mime, size = _svc(request, project_id, root_type).open_stream(path, max_stream_bytes=settings.max_stream_bytes)
 
     range_header = request.headers.get("range")
     start, end = 0, size - 1

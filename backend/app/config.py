@@ -16,6 +16,23 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+# 산출물 트리 root_type allowlist (코드탭/페르소나탭 추가, 제우스 2026-06-14).
+# documents = 산출물 문서 트리(현행), system = 코드(소스) 트리, persona = brain(역할 페르소나) 트리.
+# 그 외 값은 router 에서 거절. 신규 탭 추가는 이 매핑에 한 줄만 더하면 전 분기에 자동 반영된다.
+# (모듈 레벨 상수 — pydantic BaseSettings 의 언더스코어 PrivateAttr 가로채기를 피한다.)
+ROOT_TYPE_SUBDIR: dict[str, str] = {"documents": "documents", "system": "system", "persona": "brain"}
+
+
+def _root_type_subdir(root_type: str | None) -> str:
+    """root_type → 프로젝트 루트 하위 디렉터리명. 미지정/빈값/미지의 값 = documents(하위호환).
+
+    엄격한 enum 거절은 router 레벨(invalid_request)에서 수행한다. 여기서는 안전한
+    기본값(documents)으로 수렴시켜, 잘못된 값이 와도 절대 allowlist 외 임의경로로 새지 않게 한다.
+    """
+    rt = (root_type or "").strip().lower()
+    return ROOT_TYPE_SUBDIR.get(rt, "documents")
+
+
 def _default_artifacts_root() -> Path:
     """레포 기준 documents/products/AgiTeamApp 자동 추정."""
     return _repo_root() / "documents" / "products" / "AgiTeamApp"
@@ -112,20 +129,23 @@ class Settings(BaseSettings):
     def artifacts_root_resolved(self) -> Path:
         return Path(self.artifacts_root).resolve()
 
-    def artifacts_root_for(self, project_id: str | None) -> Path:
-        """project_id 별 산출물 트리 root 해소 (QI-WG-024 정밀화).
+    def artifacts_root_for(self, project_id: str | None, root_type: str | None = None) -> Path:
+        """project_id·root_type 별 트리 root 해소 (QI-WG-024 정밀화 + 코드탭 확장).
 
-        규약(균일): 모든 프로젝트의 산출물 트리 루트 = `<project_root>/documents`.
-        트리 top 노드 이름은 "documents", 그 아래 00.standard·01.proposal·02.reverse·
-        03.management·04.development·05.operation 이 보인다. UI 드롭다운에서 선택된
-        project_id 를 따라 전환한다(AgiTeamApp 특례 없음). projects 와 동일한 project_root() 사용.
+        규약(documents): 모든 프로젝트의 산출물 트리 루트 = `<project_root>/documents`.
+        규약(system): 코드(소스) 트리 루트 = `<project_root>/system`.
+        root_type 미지정/빈값 = documents (하위호환 필수). 트리 top 노드 이름은 하위
+        디렉터리명("documents" 또는 "system")이 된다. UI 드롭다운에서 선택된 project_id 를
+        따라 전환한다(AgiTeamApp 특례 없음). projects 와 동일한 project_root() 사용.
+        allowlist/traversal 보안은 해소된 root 기준으로 ArtifactService 가 동일 적용한다.
         """
         pid = project_id or self.project_id
-        return (self.project_root(pid) / "documents").resolve()
+        subdir = _root_type_subdir(root_type)
+        return (self.project_root(pid) / subdir).resolve()
 
-    def artifacts_display_root_for(self, project_id: str | None) -> str:
-        """응답용 논리 루트 라벨 (host 절대경로 비노출). 트리 top 노드는 'documents'."""
-        return "documents/"
+    def artifacts_display_root_for(self, project_id: str | None, root_type: str | None = None) -> str:
+        """응답용 논리 루트 라벨 (host 절대경로 비노출). top 노드는 'documents/' 또는 'system/'."""
+        return f"{_root_type_subdir(root_type)}/"
 
     def project_root(self, project_id: str) -> Path:
         """project_id → 파일시스템 루트. project_roots_json 우선, 없으면 base/<project_id>."""
