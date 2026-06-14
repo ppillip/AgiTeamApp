@@ -29,8 +29,10 @@ from app.services.artifact_watcher import (
     node_type_of,
     normalize_fs_kind,
     parent_path,
+    parse_cursor_key,
     parse_cursor_ts,
 )
+from app.services.artifact_watcher import _iso_z
 
 
 # --- 순수 헬퍼 ------------------------------------------------------------------
@@ -140,6 +142,80 @@ def test_buffer_project_isolation():
     _entry(buf, "ProjB", "b.md", now)
     updates, _ = buf.changes_after("ProjA", None, 100)
     assert [u["path"] for u in updates] == ["a.md"]
+
+
+# --- 복합키 페이지네이션: 같은 ms 다중 root_type 중복 결함 (아르고스 발견, 2026-06-14) ----
+
+def _entry_rt(buf, pid, path, ts, root_type):
+    buf.append(pid, {"path": path, "project_id": pid, "root_type": root_type},
+               ts, make_cursor(ts, path, root_type))
+
+
+def test_parse_cursor_key_roundtrip():
+    ts = datetime(2026, 6, 14, 13, 0, 0, 123000, tzinfo=timezone.utc)
+    # system/persona: prefix 포함, 복원 정확
+    for rt in ("system", "persona"):
+        cur = make_cursor(ts, "PM/persona.md", rt)
+        pts, prt, ppath = parse_cursor_key(cur)
+        assert prt == rt and ppath == "PM/persona.md"
+    # documents: prefix 생략 → documents 로 복원
+    cur_d = make_cursor(ts, "a b.md", "documents")
+    _pts, prt_d, ppath_d = parse_cursor_key(cur_d)
+    assert prt_d == "documents" and ppath_d == "a b.md"   # urldecode 까지 정확
+    # timestamp-only(하위호환): artifact part 없음 → path None
+    _t, rt_n, path_n = parse_cursor_key(_iso_z(ts))
+    assert rt_n is None and path_n is None
+
+
+def test_buffer_no_dup_same_ms_multiroot():
+    """같은 상대경로를 3루트에 동시(같은 ms) 생성 → 3건 매칭 → 재조회 시 0건(중복 없음)."""
+    buf = ArtifactChangeBuffer()
+    ts = datetime(2026, 6, 14, 13, 0, 0, tzinfo=timezone.utc)
+    # 핵심 재현: coalescer 처럼 root_type 별 ts 가 마이크로초만 다르고 cursor 는 ms 절단된다.
+    for i, rt in enumerate(("system", "documents", "persona")):   # append 순서 ≠ 정렬 순서(의도)
+        _entry_rt(buf, "P", "same.txt", ts + timedelta(microseconds=i * 11), rt)
+    updates, cursor = buf.changes_after("P", None, 100)
+    assert len(updates) == 3
+    assert sorted(u["root_type"] for u in updates) == ["documents", "persona", "system"]
+    # next_cursor 재조회 → 0건
+    again, _ = buf.changes_after("P", cursor, 100)
+    assert again == []
+    # 이후 새 변경만 잡힘
+    ts2 = ts + timedelta(milliseconds=5)
+    _entry_rt(buf, "P", "new.txt", ts2, "system")
+    after_new, _ = buf.changes_after("P", cursor, 100)
+    assert [u["path"] for u in after_new] == ["new.txt"]
+
+
+def test_buffer_limit_boundary_same_ms():
+    """같은 ms 3건을 limit=2 로 '전진' 분할 조회 → 복합키 정렬·경계 정확(누락/중복 0).
+
+    forward pagination 의미: 시작 cursor(그룹 직전)부터 newer 방향으로 limit 씩.
+    """
+    buf = ArtifactChangeBuffer()
+    base = datetime(2026, 6, 14, 13, 0, 0, tzinfo=timezone.utc)
+    _entry_rt(buf, "P", "old.md", base, "documents")
+    ts = base + timedelta(milliseconds=10)
+    # entry.ts 에 마이크로초 편차를 일부러 줘서 ms절단 효과를 검증(append 순서도 섞음)
+    for i, rt in enumerate(("system", "documents", "persona")):
+        _entry_rt(buf, "P", "x.txt", ts + timedelta(microseconds=i * 7), rt)
+    start = make_cursor(base, "old.md", "documents")        # 그룹 직전 cursor
+    page1, c1 = buf.changes_after("P", start, 2)
+    assert [u["root_type"] for u in page1] == ["documents", "persona"]   # 복합키 정렬
+    page2, c2 = buf.changes_after("P", c1, 2)
+    assert [u["root_type"] for u in page2] == ["system"]                 # 나머지 1건(중복 없음)
+    page3, _ = buf.changes_after("P", c2, 2)
+    assert page3 == []                                                   # 더 없음
+
+
+def test_buffer_timestamp_only_cursor_backcompat():
+    """순수 ISO timestamp-only cursor → 기존 동작(ts 초과) 유지."""
+    buf = ArtifactChangeBuffer()
+    base = datetime(2026, 6, 14, 13, 0, 0, tzinfo=timezone.utc)
+    for i in range(3):
+        _entry_rt(buf, "P", f"a{i}.md", base + timedelta(seconds=i), "documents")
+    updates, _ = buf.changes_after("P", _iso_z(base), 100)
+    assert [u["path"] for u in updates] == ["a1.md", "a2.md"]
 
 
 # --- Coalescer (디바운스/병합) — create/modify/delete → 이벤트 발행 ----------------
@@ -364,6 +440,97 @@ async def _wait_for(cond, timeout: float):
             return
         await asyncio.sleep(0.05)
     raise AssertionError("condition not met within timeout")
+
+
+# --- 멀티루트 + root_type 이벤트 (코드/페르소나 탭, 2026-06-14) -------------------
+
+
+def _watcher_multiroot(monkeypatch, tmp_path: Path):
+    """documents·system·brain 3루트를 모두 scaffold 한 watcher."""
+    proj = tmp_path / "MultiProj"
+    (proj / "documents" / "04.development").mkdir(parents=True)
+    (proj / "system" / "backend").mkdir(parents=True)
+    (proj / "brain" / "PM").mkdir(parents=True)
+    (proj / ".agiteam").mkdir()
+    settings = _make_settings(monkeypatch, proj, "MultiProj")
+    w = ArtifactWatcher(settings, registry=None)
+    w._targets = w.resolve_targets()
+    return w, proj
+
+
+def test_resolve_targets_multiroot(monkeypatch, tmp_path):
+    w, _proj = _watcher_multiroot(monkeypatch, tmp_path)
+    by_rt = {t.root_type: t for t in w._targets}
+    assert set(by_rt) == {"documents", "system", "persona"}    # 3루트 모두 schedule 대상
+    assert by_rt["persona"].root.name == "brain"               # persona → brain
+    assert by_rt["system"].root.name == "system"
+    assert all(t.project_id == "MultiProj" for t in w._targets)
+
+
+def test_resolve_targets_skips_missing_root(monkeypatch, tmp_path):
+    """system/brain 디렉토리가 없는 프로젝트는 documents 만 잡힌다(존재하는 root 만)."""
+    proj = tmp_path / "DocsOnly"
+    (proj / "documents").mkdir(parents=True)
+    (proj / ".agiteam").mkdir()
+    settings = _make_settings(monkeypatch, proj, "DocsOnly")
+    w = ArtifactWatcher(settings, registry=None)
+    targets = w.resolve_targets()
+    assert {t.root_type for t in targets} == {"documents"}
+
+
+def test_match_target_resolves_root_type(monkeypatch, tmp_path):
+    w, proj = _watcher_multiroot(monkeypatch, tmp_path)
+    # system 루트 하위 파일 → root_type=system, 상대경로는 system 기준
+    m_sys = w._match_target(str(proj / "system" / "backend" / "app.py"))
+    assert m_sys is not None and m_sys[0].root_type == "system"
+    assert m_sys[1] == "backend/app.py"
+    # brain 루트 하위 → root_type=persona
+    m_persona = w._match_target(str(proj / "brain" / "PM" / "persona.md"))
+    assert m_persona is not None and m_persona[0].root_type == "persona"
+    assert m_persona[1] == "PM/persona.md"
+
+
+@pytest.mark.asyncio
+async def test_coalesce_key_includes_root_type():
+    """같은 상대경로라도 root_type 이 다르면 별도 버킷으로 flush(충돌 방지)."""
+    loop = asyncio.get_running_loop()
+    flushed: list[dict] = []
+    coal = Coalescer(loop, lambda data, ts, cur: flushed.append(data),
+                     debounce_seconds=0.05, hard_flush_seconds=0.5)
+    coal.add("P", "PM/persona.md", "/abs/brain/PM/persona.md", "modified", False, root_type="persona")
+    coal.add("P", "PM/persona.md", "/abs/system/PM/persona.md", "modified", False, root_type="system")
+    await asyncio.sleep(0.15)
+    rts = sorted(d["root_type"] for d in flushed)
+    assert rts == ["persona", "system"]              # 2건(병합 안 됨)
+    assert {d["path"] for d in flushed} == {"PM/persona.md"}
+
+
+@pytest.mark.asyncio
+async def test_on_raw_event_emits_root_type(monkeypatch, tmp_path):
+    """system 파일 변경 → payload·cursor 에 root_type=system 포함."""
+    w, proj = _watcher_multiroot(monkeypatch, tmp_path)
+    loop = asyncio.get_running_loop()
+    w._loop = loop
+    w._coalescer = Coalescer(loop, w._emit, debounce_seconds=0.05, hard_flush_seconds=0.5)
+    captured: list[tuple] = []
+
+    async def fake_publish(room_id, payload, project_id):
+        captured.append((room_id, payload, project_id))
+
+    w._publish = fake_publish
+    abs_path = str(proj / "system" / "backend" / "app.py")
+    Path(abs_path).write_text("x=1", encoding="utf-8")
+    w._on_raw_event(abs_path, "created", False)
+    await asyncio.sleep(0.15)
+    assert len(captured) == 1
+    _room, payload, _pid = captured[0]
+    data = payload["data"]
+    assert data["root_type"] == "system"             # FE 계약
+    assert data["path"] == "backend/app.py"          # system 루트 기준 상대경로
+    assert "system:" in payload["cursor"]            # cursor 에 root_type 반영
+    # ring buffer 조회 시에도 root_type 포함
+    updates, _ = w.buffer.changes_after("MultiProj", None, 100)
+    assert updates and updates[-1]["root_type"] == "system"
 
 
 def test_watcher_degrades_when_no_targets(monkeypatch, tmp_path):

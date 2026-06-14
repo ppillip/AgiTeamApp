@@ -27,6 +27,17 @@ import {
 let clientSeq = 0;
 const nextClientId = () => `c_${Date.now()}_${++clientSeq}`;
 
+// 산출물 패널 탭(root_type) — 외부 변경 표식(WG-ART-06)을 탭별로 분리 보관하기 위한 키.
+const ROOT_TYPES = ["documents", "system", "persona"];
+// 알 수 없는/누락 root_type 은 documents 로 귀속(BE 가 아직 root_type 미동봉이어도 기존 동작 보존).
+function normalizeRootType(rt) {
+  return ROOT_TYPES.includes(rt) ? rt : "documents";
+}
+// 탭별 빈 외부변경 맵 — { documents:{}, system:{}, persona:{} }
+function freshExternalChanges() {
+  return { documents: {}, system: {}, persona: {} };
+}
+
 export const store = reactive({
   // 연결/모드
   degraded: false, // true = 백엔드 미연결, mock 표시
@@ -77,7 +88,10 @@ export const store = reactive({
   // 외부 수정 표식 (WG-ART-06, DV-72): artifact_watcher 가 감지한 '외부' 변경 파일 path 집합.
   //   트리에서 해당 파일명을 amber 로 강조하고, 파일을 열면(openFile) 해제한다.
   //   자기 저장(saveArtifact)으로 인한 watcher echo 는 강조 대상에서 제외한다.
-  externalChanges: {}, // path -> true
+  //   탭별 분리(root_type): { documents:{path:true}, system:{...}, persona:{...} }.
+  //   변경 이벤트의 root_type 에 따라 해당 탭 맵에 기록 → 다른 탭에서 변경돼도 누적되고,
+  //   탭 전환(setRootType) 시에도 보존되어 그 탭으로 가면 하이라이팅이 그대로 보인다.
+  externalChanges: freshExternalChanges(),
 });
 
 // ── 파생 getter (computed 대용 함수) ─────────────────────────
@@ -502,38 +516,55 @@ export async function loadRoomPreviews(limit = 6, { silent = false } = {}) {
 // 이는 '외부' 변경이 아니므로 트리 강조 대상에서 뺀다. 저장 직전 path 를 잠깐(TTL) 등록해 두고
 // 그 사이 들어온 같은 path 의 변경은 강조하지 않는다.
 const SELF_WRITE_TTL = 10000; // ms — watcher 디바운스 + 네트워크 지연 여유
-const recentSelfWrites = new Map(); // path -> timeoutId
-function noteSelfWrite(path) {
+const recentSelfWrites = new Map(); // `${root}:${path}` -> timeoutId (root 별 자기저장 echo 키)
+function selfWriteKey(root, path) {
+  return `${normalizeRootType(root)}:${path}`;
+}
+function noteSelfWrite(root, path) {
   if (!path) return;
-  const prev = recentSelfWrites.get(path);
+  const key = selfWriteKey(root, path);
+  const prev = recentSelfWrites.get(key);
   if (prev) clearTimeout(prev);
   recentSelfWrites.set(
-    path,
-    setTimeout(() => recentSelfWrites.delete(path), SELF_WRITE_TTL)
+    key,
+    setTimeout(() => recentSelfWrites.delete(key), SELF_WRITE_TTL)
   );
 }
-function isSelfWrite(path) {
-  return recentSelfWrites.has(path);
+function isSelfWrite(root, path) {
+  return recentSelfWrites.has(selfWriteKey(root, path));
 }
 
-// 외부 변경 표식 추가/해제 (WG-ART-06). 자기 저장 echo·현재 보고 있는 파일은 강조하지 않는다.
-function markExternalChange(path) {
+// 외부 변경 표식 추가/해제 (WG-ART-06). 자기 저장 echo·현재(활성 탭에서) 보고 있는 파일은 강조 제외.
+//   root: 변경이 속한 탭(documents|system|persona). 그 탭 맵에만 기록한다.
+function markExternalChange(root, path) {
   if (!path) return;
-  if (isSelfWrite(path)) return; // 자기 저장 echo → 외부 변경 아님
-  if (store.viewer.open && store.viewer.path === path) return; // 보고 있는 파일 → 자동 reload 로 충분
-  store.externalChanges[path] = true;
+  const r = normalizeRootType(root);
+  if (isSelfWrite(r, path)) return; // 자기 저장 echo → 외부 변경 아님
+  // 지금 보고 있는 파일(활성 탭 + 같은 path)이면 자동 reload 로 충분 → 강조 불필요.
+  if (r === store.rootType && store.viewer.open && store.viewer.path === path) return;
+  if (!store.externalChanges[r]) store.externalChanges[r] = {};
+  store.externalChanges[r][path] = true;
 }
-export function clearExternalChange(path) {
-  if (path && store.externalChanges[path]) delete store.externalChanges[path];
+// 특정 탭(root)의 표식 해제. root 미지정 시 현재 활성 탭 기준(openFile 등 활성 탭 열람 경로).
+export function clearExternalChange(path, root) {
+  if (!path) return;
+  const r = normalizeRootType(root || store.rootType);
+  const m = store.externalChanges[r];
+  if (m && m[path]) delete m[path];
 }
 
 function applyArtifactChange(data) {
   if (store.degraded) return;
+  // 변경이 속한 탭(root_type). BE 미동봉 시 documents 로 귀속(기존 동작 보존).
+  const changeRoot = normalizeRootType(data && data.root_type);
+  const isActiveRoot = changeRoot === store.rootType;
+  // 트리/뷰어 부수효과 판정은 '활성 탭'에서만 의미가 있다(expanded·viewer 는 활성 탭 상태).
+  // 비활성 탭 변경은 표식만 누적하고, 다음 탭 진입/펼침에서 최신 트리를 받는다.
   const plan = planArtifactChange(data, {
     selectedProjectId: store.selectedProjectId,
-    viewerOpen: store.viewer.open,
+    viewerOpen: isActiveRoot && store.viewer.open,
     viewerPath: store.viewer.path,
-    expanded: store.expanded,
+    expanded: isActiveRoot ? store.expanded : {},
   });
   if (plan.ignore) return;
 
@@ -549,8 +580,11 @@ function applyArtifactChange(data) {
     (plan.changeType === "modified" || plan.changeType === "created") &&
     data.node_type !== "directory"
   ) {
-    markExternalChange(plan.path);
+    markExternalChange(changeRoot, plan.path); // 변경이 속한 탭 맵에 기록(비활성 탭도 누적)
   }
+
+  // 트리/뷰어 부수효과(1~3)는 활성 탭(root_type 일치)에만 적용. 비활성 탭은 표식만 남기고 종료.
+  if (!isActiveRoot) return;
 
   // 1) 현재 뷰어 중인 파일 변경 반영
   if (plan.viewer === "deleted") {
@@ -709,7 +743,7 @@ export async function selectProject(projectId) {
   store.treeRoot = null;
   store.expanded = {};
   store.childrenCache = {};
-  store.externalChanges = {}; // 외부 수정 표식 초기화(이전 프로젝트 컨텍스트)
+  store.externalChanges = freshExternalChanges(); // 외부 수정 표식 초기화(이전 프로젝트 컨텍스트, 전 탭)
   closeViewer();
 
   if (store.degraded) {
@@ -1049,9 +1083,9 @@ export async function loadTreeRoot() {
   }
 }
 
-// 문서 패널 탭 전환(산출물 documents ↔ 코드 system). 선택 프로젝트는 유지하되,
-// 트리·뷰어·펼침/캐시·외부변경 표식을 초기화(루트가 다르면 path 가 전혀 다르므로)한 뒤 새 root 로드.
-const ROOT_TYPES = ["documents", "system", "persona"];
+// 문서 패널 탭 전환(산출물 documents ↔ 코드 system ↔ 페르소나 persona). 선택 프로젝트는 유지하되,
+// 트리·뷰어·펼침/캐시를 초기화(루트가 다르면 path 가 전혀 다르므로)한 뒤 새 root 로드.
+// 단, 외부변경 표식(externalChanges)은 탭별로 보존한다 — 다른 탭의 미열람 변경이 사라지면 안 되므로.
 export async function setRootType(rootType) {
   if (!ROOT_TYPES.includes(rootType)) return;
   if (store.rootType === rootType) return;
@@ -1060,7 +1094,6 @@ export async function setRootType(rootType) {
   store.expanded = {};
   store.childrenCache = {};
   store.childrenLoading = {};
-  store.externalChanges = {};
   closeViewer();
   await loadTreeRoot();
 }
@@ -1143,14 +1176,15 @@ export async function saveArtifact(path, content) {
     throw new ApiError("오프라인 상태에서는 저장할 수 없습니다.", { code: "offline_save" });
   }
   const pid = store.selectedProjectId;
-  noteSelfWrite(path); // 저장 직전 등록(이후 watcher 의 같은 path 변경은 외부 강조 제외)
-  const { file } = await api.writeFile(path, content, { projectId: pid, rootType: store.rootType });
+  const root = store.rootType;
+  noteSelfWrite(root, path); // 저장 직전 등록(이후 watcher 의 같은 root+path 변경은 외부 강조 제외)
+  const { file } = await api.writeFile(path, content, { projectId: pid, rootType: root });
   // 저장 성공 → 현재 뷰어 파일 즉시 최신화. 서버가 파일 메타를 주면 그것으로, 아니면 content 만 반영.
   if (store.viewer.open && store.viewer.path === path && store.selectedProjectId === pid) {
     if (file) store.viewer.file = file;
     else if (store.viewer.file) store.viewer.file = { ...store.viewer.file, content };
   }
-  clearExternalChange(path); // 자기 저장본은 외부 변경 아님 → 표식 해제
+  clearExternalChange(path, root); // 자기 저장본은 외부 변경 아님 → 해당 탭 표식 해제
   return file;
 }
 

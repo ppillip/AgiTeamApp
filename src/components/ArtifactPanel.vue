@@ -43,6 +43,15 @@ export default {
     selectTab(key) {
       setRootType(key); // 같은 탭이면 store 에서 no-op
     },
+    // 비활성 탭에 미열람 변경이 있으면 탭에 amber 점 표시(그 탭 트리를 안 봐도 인지).
+    // 활성 탭의 변경은 트리에서 직접 보이므로 점은 비활성 탭에만.
+    tabHasUnseen(key) {
+      if (key === store.rootType) return false;
+      const m = store.externalChanges[key];
+      if (!m) return false;
+      for (const p in m) if (m[p]) return true;
+      return false;
+    },
     startDrag(e) {
       this.dragging = true;
       this._startY = e.clientY;
@@ -96,9 +105,14 @@ export default {
           v-for="tab in rootTabs"
           :key="tab.key"
           @click="selectTab(tab.key)"
-          :class="['rounded-md px-3 py-[5px] text-[13px] font-bold transition-colors',
+          :class="['relative rounded-md px-3 py-[5px] text-[13px] font-bold transition-colors',
                    store.rootType === tab.key ? 'bg-white text-amber-600 shadow-sm' : 'text-ink-500 hover:text-ink-700']"
-        >{{ tab.label }}</button>
+        >{{ tab.label }}<!-- 비활성 탭 미열람 변경 점(요구사항 17-2 root_type 확장) -->
+          <span
+            v-if="tabHasUnseen(tab.key)"
+            class="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber"
+            title="이 탭에 미열람 변경이 있습니다"
+          ></span></button>
       </div>
       <button @click="reload" class="flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6] hover:text-ink-600" title="새로고침">
         <Icon name="refresh" :size="15" />

@@ -27,15 +27,19 @@ export default {
     selected() {
       return store.viewer.path === this.node.path;
     },
+    // 현재 활성 탭(root_type)의 외부변경 맵. 트리는 항상 활성 탭 트리이므로 그 탭의 표식만 본다.
+    rootChanges() {
+      return store.externalChanges[store.rootType] || {};
+    },
     // 외부 수정 표식(WG-ART-06): artifact_watcher 가 감지한 외부 변경 '파일' → 파일명 amber 강조.
-    // 파일을 열면(openFile) 해제된다.
+    // 파일을 열면(openFile) 해제된다. (root_type 별 분리 — 코드/페르소나 탭도 동일 동작)
     externallyChanged() {
-      return !this.node.isDir && !!store.externalChanges[this.node.path];
+      return !this.node.isDir && !!this.rootChanges[this.node.path];
     },
     // UI-10 폴더 전파(요구사항 17-2): 폴더 하위에 미열람 변경이 있으면 폴더명도 amber.
     // 접힌 폴더 안의 변경도 펼치지 않고 인지 가능. 형제 변경이 남아 있으면 유지, 다 열람되면 원복.
     folderHasUnseen() {
-      return this.node.isDir && folderHasUnseenChange(store.externalChanges, this.node.path);
+      return this.node.isDir && folderHasUnseenChange(this.rootChanges, this.node.path);
     },
     // 파일/폴더 공통 미열람 강조 여부(파일=자신 변경, 폴더=하위 변경 전파)
     markUnseen() {
