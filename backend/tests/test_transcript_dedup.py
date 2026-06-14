@@ -124,3 +124,83 @@ async def test_transcript_source_not_matched(sessionmaker):
     async with sessionmaker() as db:
         dup = await _find_outbound_text_dup(db, room.room_id, "from transcript")
         assert dup is None
+
+
+# --- 결함수정 2026-06-14: 이미지 첨부 합성본([Image: source:]) 중복 저장 ----------
+
+async def _prefile_bridge_attachment_msg(db, room, text: str):
+    """이미지 첨부 bridge 선저장본: source=webgui, attachments_json 보유, 공개 text=원문."""
+    msg = await repo.create_message(
+        db,
+        room_id=room.room_id,
+        role_id="PM",
+        direction="outbound",
+        source="webgui",
+        message_type="user_message",
+        raw_text=text,
+        normalized_text=text,
+        attachments_json=[{"kind": "image", "attachment_id": "att-1"}],
+        status="pending",
+        occurred_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+    )
+    await db.commit()
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_image_attachment_synth_text_matches_bridge(sessionmaker):
+    """버그 재현: bridge 가 원문만 저장, transcript 가 원문+[Image: source:] 합성본 → 매칭되어 skip."""
+    async with sessionmaker() as db:
+        room = await _make_pm_room(db)
+        bridge = await _prefile_bridge_attachment_msg(db, room, "저 물음표 머지? 문제 생긴건가?")
+    synth = "저 물음표 머지? 문제 생긴건가?\n\n[Image: source: /Users/ppillip/Projects/Panthea/.agiteam/webgui/uploads/images/x.png]"
+    async with sessionmaker() as db:
+        dup = await _find_outbound_text_dup(db, room.room_id, synth)
+        assert dup is not None and dup.message_id == bridge.message_id
+
+
+@pytest.mark.asyncio
+async def test_codex_attachment_block_matches_bridge(sessionmaker):
+    """codex 합성형식(첨부 이미지 파일 경로:)도 본문만으로 매칭되어야."""
+    async with sessionmaker() as db:
+        room = await _make_pm_room(db)
+        bridge = await _prefile_bridge_attachment_msg(db, room, "이 화면 봐줘")
+    synth = "이 화면 봐줘\n\n첨부 이미지 파일 경로:\n/abs/a.png\n/abs/b.jpg"
+    async with sessionmaker() as db:
+        dup = await _find_outbound_text_dup(db, room.room_id, synth)
+        assert dup is not None and dup.message_id == bridge.message_id
+
+
+@pytest.mark.asyncio
+async def test_image_only_empty_text_matches_bridge(sessionmaker):
+    """본문 없이 이미지만 전송: bridge text='' + 첨부 보유, transcript=sentinel+[Image:source:] → 매칭."""
+    async with sessionmaker() as db:
+        room = await _make_pm_room(db)
+        bridge = await _prefile_bridge_attachment_msg(db, room, "")
+    synth = "첨부 이미지를 확인하세요.\n\n[Image: source: /abs/only.png]"
+    async with sessionmaker() as db:
+        dup = await _find_outbound_text_dup(db, room.room_id, synth)
+        assert dup is not None and dup.message_id == bridge.message_id
+
+
+@pytest.mark.asyncio
+async def test_text_only_still_single(sessionmaker):
+    """텍스트만 전송(첨부 없음)은 현행대로 정확 매칭 — 합성 strip 이 본문을 훼손하지 않는다."""
+    async with sessionmaker() as db:
+        room = await _make_pm_room(db)
+        bridge = await _prefile_bridge_msg(db, room, "그냥 텍스트 메시지")
+    async with sessionmaker() as db:
+        dup = await _find_outbound_text_dup(db, room.room_id, "그냥 텍스트 메시지")
+        assert dup is not None and dup.message_id == bridge.message_id
+
+
+@pytest.mark.asyncio
+async def test_different_image_message_not_matched(sessionmaker):
+    """다른 본문의 이미지 첨부 메시지는 매칭되면 안 된다(과매칭 방지)."""
+    async with sessionmaker() as db:
+        room = await _make_pm_room(db)
+        await _prefile_bridge_attachment_msg(db, room, "첫 번째 이미지 메시지")
+    synth = "완전히 다른 메시지\n\n[Image: source: /abs/other.png]"
+    async with sessionmaker() as db:
+        dup = await _find_outbound_text_dup(db, room.room_id, synth)
+        assert dup is None

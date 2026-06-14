@@ -117,8 +117,14 @@ async def write_artifact(
     경로 체계는 GET /tree 와 동일(per-project root 기준 상대경로). 보안은
     ArtifactService.resolve() 가 GET 계열과 동일하게 적용한다(allowlist+traversal 차단).
     성공 200 {saved: true, path}, 경로 위반 403, .md 아님 400, 쓰기 실패 500.
+
+    project_id·root_type 은 FE 가 POST body 로 보낸다. body 값을 우선 사용하고,
+    없으면 query 파라미터로 fallback 한다(하위호환). 이로써 brain(persona)/system 편집이
+    정확한 루트에 저장된다(이전엔 query 만 읽어 body 가 무시→documents 로 오저장).
     """
-    data = _svc(request, project_id, root_type).write_file(body.path, body.content)
+    pid = body.project_id if body.project_id is not None else project_id
+    rt = body.root_type if body.root_type is not None else root_type
+    data = _svc(request, pid, rt).write_file(body.path, body.content)
     return ok(data)
 
 

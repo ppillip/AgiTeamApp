@@ -97,3 +97,64 @@ def test_post_write_traversal_403(client):
         json={"path": "../escape.md", "content": "x"},
     )
     assert r.status_code == 403
+
+
+# --- 결함수정 2026-06-14: write root_type FE-BE 불일치(body vs query) ----------
+# FE writeFile 은 project_id·root_type 을 POST body 로 보낸다. BE 가 query 로만 읽어
+# body 가 무시되면 root_type=documents 기본화 → brain/system 편집이 documents 에 오저장.
+
+def test_post_write_root_type_persona_body(client, art_root):
+    """root_type=persona 를 body 로 전송 → brain/ 에 저장(documents 아님)."""
+    r = client.post(
+        "/api/webgui/artifacts/write",
+        json={"project_id": "TestProj", "root_type": "persona",
+              "path": "PM/persona.md", "content": "# PM 편집본"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["saved"] is True
+    brain = art_root.parent / "brain" / "PM" / "persona.md"
+    assert brain.read_text(encoding="utf-8") == "# PM 편집본"      # brain 에 실제 저장
+    assert not (art_root / "PM" / "persona.md").exists()           # documents 오저장 없음
+
+
+def test_post_write_root_type_system_body(client, art_root):
+    """root_type=system 을 body 로 전송 → system/ 에 저장."""
+    r = client.post(
+        "/api/webgui/artifacts/write",
+        json={"project_id": "TestProj", "root_type": "system",
+              "path": "docs/NOTE.md", "content": "# 소스 노트"},
+    )
+    assert r.status_code == 200, r.text
+    system = art_root.parent / "system" / "docs" / "NOTE.md"
+    assert system.read_text(encoding="utf-8") == "# 소스 노트"
+    assert not (art_root / "docs" / "NOTE.md").exists()
+
+
+def test_post_write_documents_default_unchanged(client, art_root):
+    """root_type 미지정 → 현행대로 documents 에 저장(하위호환)."""
+    r = client.post(
+        "/api/webgui/artifacts/write",
+        json={"project_id": "TestProj", "path": "02.설계/doc-default.md", "content": "x"},
+    )
+    assert r.status_code == 200, r.text
+    assert (art_root / "02.설계" / "doc-default.md").read_text(encoding="utf-8") == "x"
+
+
+def test_post_write_persona_traversal_403(client):
+    """brain 루트에서도 상위 escape 차단(read 와 동일 보안)."""
+    r = client.post(
+        "/api/webgui/artifacts/write",
+        json={"project_id": "TestProj", "root_type": "persona",
+              "path": "../documents/evil.md", "content": "x"},
+    )
+    assert r.status_code == 403
+
+
+def test_post_write_invalid_root_type_400(client):
+    r = client.post(
+        "/api/webgui/artifacts/write",
+        json={"project_id": "TestProj", "root_type": "etc",
+              "path": "PM/x.md", "content": "x"},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "invalid_request"

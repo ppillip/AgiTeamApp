@@ -16,7 +16,11 @@ from app.db.base import Base
 from app.services import events as events_mod
 from app.services.attachment_service import AttachmentService
 from app.services.cmux_discovery import DiscoveryRegistry, SurfaceInfo
-from app.services.pm_bridge import PMBridge, compose_submit_text
+from app.services.pm_bridge import (
+    PMBridge,
+    compose_submit_text,
+    strip_submit_attachment_suffix,
+)
 
 
 @compiles(JSONB, "sqlite")
@@ -64,6 +68,36 @@ def test_compose_empty_text_uses_default_line():
 
 def test_compose_no_attachments_passthrough():
     assert compose_submit_text("그냥 텍스트", [], "claude_code") == "그냥 텍스트"
+
+
+# --- strip_submit_attachment_suffix: compose 의 역함수(매칭 키용) ---
+
+
+def test_strip_claude_block_roundtrip():
+    synth = compose_submit_text("이 화면 봐줘", ["/abs/a.png", "/abs/b.jpg"], "claude_code")
+    assert strip_submit_attachment_suffix(synth) == "이 화면 봐줘"
+
+
+def test_strip_codex_block_roundtrip():
+    synth = compose_submit_text("스샷", ["/abs/a.png", "/abs/b.png"], "codex")
+    assert strip_submit_attachment_suffix(synth) == "스샷"
+
+
+def test_strip_empty_text_image_only_returns_empty():
+    synth = compose_submit_text("", ["/abs/a.png"], "claude_code")  # sentinel + [Image: source:]
+    assert strip_submit_attachment_suffix(synth) == ""
+
+
+def test_strip_passthrough_when_no_marker():
+    assert strip_submit_attachment_suffix("그냥 텍스트") == "그냥 텍스트"
+    assert strip_submit_attachment_suffix("") == ""
+    assert strip_submit_attachment_suffix(None) == ""
+
+
+def test_strip_survives_cmux_linewrap():
+    # cmux 래핑으로 경로가 줄바꿈/공백 섞여 들어와도 첫 마커부터 끝까지 제거된다.
+    wrapped = "본문 텍스트  \n  \n [Image: source: /Users/ppillip/Projects/Panthea/\n.agiteam/webgui/uploads/images/x.png]"
+    assert strip_submit_attachment_suffix(wrapped) == "본문 텍스트"
 
 
 # --- send() 통합 (경로 주입·DB 저장·공개응답 분리) ---

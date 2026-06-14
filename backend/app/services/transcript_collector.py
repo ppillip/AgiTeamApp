@@ -32,6 +32,7 @@ from ..db import repositories as repo
 from .cmux_discovery import DiscoveryRegistry
 from .events import hub
 from .masking import mask_text
+from .pm_bridge import _SUBMIT_ATTACHMENT_MARKERS, strip_submit_attachment_suffix
 from .sanitizer import sanitize_tool_leak
 from .transcript_parser import (
     PROVIDER_CLAUDE,
@@ -425,16 +426,23 @@ def canonical_match_text(s: str | None) -> str:
 async def _find_outbound_text_dup(db, room_id, text: str):
     """같은 방의 최근 bridge outbound 중 canonical 텍스트가 일치하는 선저장본을 반환.
 
-    cmux 래핑/공백 차이로 정확 일치(``==``)가 깨지던 문제를 해결하기 위해, 후보를
-    최근순으로 받아 Python 에서 canonical 비교한다. 일치 시 bridge 가 canonical 이므로
-    transcript insert 를 skip 한다.
+    cmux 래핑/공백 차이로 정확 일치(``==``)가 깨지던 문제를 canonical(공백 정규화) 비교로 해결한다.
+    추가로(결함수정 2026-06-14): 이미지 첨부 전송 시 transcript 에는 compose_submit_text 가
+    합성한 ``[Image: source: <abs>]`` 블록이 본문 뒤에 붙어 들어오는데, bridge 선저장본의
+    공개 text 는 사용자 원문만 보관한다. 그대로 비교하면 매칭이 깨져 같은 메시지가 2건 저장됐다.
+    → 양쪽 모두 strip_submit_attachment_suffix 로 합성 블록을 떼어낸 '매칭 키'로 비교한다.
+    본문 없이 이미지만 보낸 경우(키가 빈 문자열)는 첨부 보유 bridge outbound 와 매칭한다.
+    일치 시 bridge 가 canonical 이므로 transcript insert 를 skip 한다(표시값은 불변).
     """
     from sqlalchemy import select
 
     from ..db.models import WebguiMessage
 
-    target = canonical_match_text(text)
-    if not target:
+    raw = text or ""
+    target = canonical_match_text(strip_submit_attachment_suffix(raw))
+    had_attachment_marker = any(m in raw for m in _SUBMIT_ATTACHMENT_MARKERS)
+    # 본문도 없고 합성 첨부 마커도 없으면 매칭할 근거가 없다.
+    if not target and not had_attachment_marker:
         return None
 
     res = await db.execute(
@@ -448,8 +456,14 @@ async def _find_outbound_text_dup(db, room_id, text: str):
         .limit(50)
     )
     for cand in res.scalars().all():
-        if canonical_match_text(cand.normalized_text) == target:
-            return cand
+        cand_key = canonical_match_text(strip_submit_attachment_suffix(cand.normalized_text))
+        if target:
+            if cand_key == target:
+                return cand
+        else:
+            # 이미지 전용(본문 없음): 본문 비어있고 첨부를 보유한 bridge 선저장본을 짝으로 인정.
+            if not cand_key and cand.attachments_json:
+                return cand
     return None
 
 

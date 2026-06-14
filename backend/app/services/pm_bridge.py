@@ -65,6 +65,34 @@ def compose_submit_text(user_text: str, abs_paths: list[str], agent_type: str | 
     return "\n".join(lines)
 
 
+# compose_submit_text 가 본문 뒤에 덧붙이는 첨부 합성 블록의 시작 마커.
+# claude paste = `[Image: source: <abs>]`, codex = `첨부 이미지 파일 경로:` + 경로 목록.
+# 두 경로 모두 사용자 본문 '뒤'에만 붙으므로, 첫 마커 등장 지점부터 끝까지가 합성 영역이다.
+_SUBMIT_ATTACHMENT_MARKERS = ("[Image: source:", "첨부 이미지 파일 경로:")
+
+
+def strip_submit_attachment_suffix(text: str | None) -> str:
+    """compose_submit_text 가 덧붙인 첨부 합성 블록을 제거해 사용자 원문만 남긴다.
+
+    cross-source dedupe '매칭 키' 전용이다(표시값 normalized_text 는 건드리지 않는다).
+    합성 블록은 항상 본문 뒤에 붙으므로 첫 마커부터 문자열 끝까지를 잘라낸다 — cmux
+    줄바꿈/래핑으로 `[Image: source: <긴 절대경로>]` 가 여러 줄에 걸쳐도 안전하다.
+    본문 없이 이미지만 보낸 경우(_EMPTY_ATTACHMENT_TEXT sentinel)는 빈 문자열로 환원한다.
+    """
+    if not text:
+        return ""
+    s = text
+    cut = len(s)
+    for marker in _SUBMIT_ATTACHMENT_MARKERS:
+        idx = s.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    s = s[:cut].strip()
+    if s == _EMPTY_ATTACHMENT_TEXT:
+        return ""
+    return s
+
+
 class PMBridge:
     def __init__(
         self,
