@@ -25,7 +25,8 @@ def test_tree_subdir_files_renderable_flag(svc):
     children = {c["name"]: c for c in data["node"]["children"]}
     assert children["sample.pdf"]["renderable"] is True
     assert children["sample.pdf"]["extension"] == "pdf"
-    assert children["notes.txt"]["renderable"] is False  # unsupported 확장자
+    assert children["notes.txt"]["renderable"] is True   # .txt = code(코드뷰어 도입)
+    assert children["unknown.bin"]["renderable"] is False  # 미지원 확장자
     assert children["DS-50_화면설계서"]["node_type"] == "directory"
     assert children["DS-50_화면설계서"]["has_children"] is True
 
@@ -85,7 +86,7 @@ def test_read_docx_conversion_pending(svc):
 
 def test_read_unsupported_format(svc):
     with pytest.raises(WebguiError) as ei:
-        svc.read_file("02.설계/notes.txt")
+        svc.read_file("02.설계/unknown.bin")   # .txt 는 이제 code 로 지원 → 미지원 표본 사용
     assert ei.value.code == "unsupported_media_type"
 
 

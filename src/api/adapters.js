@@ -262,7 +262,8 @@ export function adaptFile(file) {
     ext: file.extension,
     mime: file.mime_type,
     sizeBytes: file.size_bytes,
-    renderMode: file.render_mode, // markdown | pdf_stream | converted_preview | unsupported
+    renderMode: file.render_mode, // markdown | code | pdf_stream | html | image | converted_preview | unsupported
+    languageHint: file.language_hint ?? null, // code 뷰어 언어팩 선택 힌트(BE 우선, FE 확장자 fallback)
     content: file.content ?? null,
     streamUrl: file.stream_url || null,
     convertedUrl: file.converted_url || null,

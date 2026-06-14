@@ -17,6 +17,8 @@ def _build_sample_tree(root: Path) -> None:
     (root / "02.설계" / "sample.pdf").write_bytes(b"%PDF-1.7\n%fake pdf body\n")
     (root / "02.설계" / "sample.docx").write_bytes(b"PK\x03\x04fake-docx")
     (root / "02.설계" / "notes.txt").write_text("plain text", encoding="utf-8")
+    # 코드뷰어 도입(2026-06-14)으로 .txt 는 이제 'code' 로 지원됨. 미지원 표본은 별도 확장자로.
+    (root / "02.설계" / "unknown.bin").write_bytes(b"\x00\x01\x02unsupported")
 
     # secret/숨김 후보
     (root / ".env").write_text("WEBGUI_API_TOKEN=supersecret", encoding="utf-8")

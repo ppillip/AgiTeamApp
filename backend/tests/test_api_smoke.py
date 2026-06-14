@@ -46,7 +46,7 @@ def test_artifact_file_markdown_endpoint(client):
 
 
 def test_artifact_file_unsupported_endpoint(client):
-    r = client.get("/api/webgui/artifacts/file", params={"path": "02.설계/notes.txt"})
+    r = client.get("/api/webgui/artifacts/file", params={"path": "02.설계/unknown.bin"})
     assert r.status_code == 415
     assert r.json()["error"]["code"] == "unsupported_media_type"
 

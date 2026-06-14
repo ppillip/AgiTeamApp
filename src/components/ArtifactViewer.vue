@@ -1,8 +1,12 @@
 <script>
+import { defineAsyncComponent } from "vue";
 import Icon from "./Icon.vue";
 import { store, closeViewer, saveArtifact } from "../stores/monitor.js";
 import { fileStreamUrl } from "../api/index.js";
 import { renderMarkdown } from "../lib/markdown.js";
+
+// CodeMirror 코드 에디터는 코드 파일을 처음 열 때만 로드(초기 번들 분리, 아테나 설계).
+const CodeMirrorEditor = defineAsyncComponent(() => import("./CodeMirrorEditor.vue"));
 
 // mermaid 동적 로드(초기 번들 분리 — md 뷰어에서 처음 다이어그램을 만날 때만 로드).
 // securityLevel:'strict' 로 mermaid 내부 XSS/스크립트 차단.
@@ -45,7 +49,7 @@ function loadCrepe() {
 // store.viewer 공유로 가운데 큰 뷰 내용이 즉시 교체된다(닫지 않고 연속 열람). 복귀 시 채팅 원복.
 export default {
   name: "ArtifactViewer",
-  components: { Icon },
+  components: { Icon, CodeMirrorEditor },
   props: { big: { type: Boolean, default: false } },
   emits: ["expand", "collapse"],
   data() {
@@ -57,6 +61,9 @@ export default {
       saveError: null,
       editorLoading: false, // Crepe 동적 로드/마운트 중
       dirtyFlag: false, // 에디터 내용이 마운트 시점 대비 변경됨(저장 버튼 활성 조건)
+      // 코드 에디터(CodeMirror): 단일 편집화면(렌더/수정 탭 없음). 현재 편집 내용 + dirty.
+      codeContent: "",
+      codeDirty: false,
     };
     // 비반응 인스턴스 필드(아래 created 에서 초기화): this.crepe, this.editorBase
   },
@@ -84,6 +91,23 @@ export default {
     },
     isMarkdown() {
       return this.mode === "markdown";
+    },
+    isCode() {
+      return this.mode === "code";
+    },
+    // 코드 에디터 props
+    codeLanguageHint() {
+      return this.file?.languageHint ?? null;
+    },
+    codeExtension() {
+      return this.file?.ext ?? null;
+    },
+    // 오프라인(degraded)에선 저장 불가 → 읽기 전용으로 표시(혼란 방지)
+    codeReadonly() {
+      return store.degraded;
+    },
+    codeCanSave() {
+      return this.isCode && this.codeDirty && !this.saving && !store.degraded;
     },
     // 수정 기준 원문(현재 저장본). edit 진입 시 에디터 초기값.
     mdBase() {
@@ -123,6 +147,13 @@ export default {
       this.unmountEditor(); // 이전 파일 에디터 폐기(있으면)
       this.mdTab = "render";
       this.saveError = null;
+      // 코드 에디터 상태 초기화(새 파일 내용 기준)
+      this.codeContent = this.file?.content ?? "";
+      this.codeDirty = false;
+    },
+    // 파일 내용이 외부 갱신(저장/외부수정 reload)되면 코드 baseline 동기화
+    "store.viewer.file.content"() {
+      if (this.isCode && !this.codeDirty) this.codeContent = this.file?.content ?? "";
     },
     // md 렌더 결과가 바뀌면 mermaid 다이어그램 변환(파일 전환·내용 갱신 포함)
     mdHtml() {
@@ -220,13 +251,36 @@ export default {
         this.saving = false;
       }
     },
-    // Ctrl+S / Cmd+S — 마크다운 수정 모드에서만 가로채 저장(그 외엔 브라우저 기본 동작 유지)
+    // Ctrl+S / Cmd+S — 마크다운 수정 모드 또는 코드 모드에서 가로채 저장(그 외엔 브라우저 기본 동작 유지).
+    // (코드 모드는 CodeMirror 내부 keymap 도 save 를 emit 하지만, 에디터 밖 포커스 시를 위해 window 도 커버)
     onKeydown(e) {
       if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
         if (this.isMarkdown && this.mdTab === "edit") {
           e.preventDefault();
           if (this.canSave) this.save();
+        } else if (this.isCode) {
+          e.preventDefault();
+          if (this.codeCanSave) this.saveCode();
         }
+      }
+    },
+    // 코드 에디터 편집 → dirty 갱신(현재 저장본과 다를 때만)
+    onCodeInput(val) {
+      this.codeContent = val;
+      this.codeDirty = val !== (this.file?.content ?? "");
+    },
+    // 코드 저장: 기존 saveArtifact/writeFile 재사용(rootType 전달 유지). 성공 시 baseline 갱신.
+    async saveCode() {
+      if (!this.file || this.saving || !this.codeDirty) return;
+      this.saving = true;
+      this.saveError = null;
+      try {
+        await saveArtifact(this.file.path, this.codeContent);
+        this.codeDirty = false; // 저장본 = 현재 내용 → dirty 해제
+      } catch (e) {
+        this.saveError = e?.message || "저장에 실패했습니다.";
+      } finally {
+        this.saving = false;
       }
     },
     // md 본문 내 .mermaid-block 들을 SVG 다이어그램으로 변환. 실패한 블록은 코드블록으로 폴백.
@@ -298,6 +352,17 @@ export default {
             <Icon name="check" :size="14" />{{ saving ? "저장 중…" : "저장" }}
           </button>
         </template>
+        <!-- code: 단일 편집화면(렌더/수정 탭 없음) — 저장 버튼만 -->
+        <button
+          v-if="file && mode === 'code'"
+          @click="saveCode"
+          :disabled="!codeCanSave"
+          class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition-colors"
+          :class="codeCanSave ? 'bg-amber text-white hover:bg-amber-600' : 'cursor-not-allowed bg-[#F4F4F6] text-ink-400'"
+          title="저장 (Ctrl/Cmd+S)"
+        >
+          <Icon name="check" :size="14" />{{ saving ? "저장 중…" : "저장" }}
+        </button>
         <!-- 큰 뷰: 채팅으로 복귀 / 패널: 크게 + 닫기 -->
         <button v-if="big" @click="$emit('collapse')" class="flex items-center gap-1.5 rounded-lg bg-[#F4F4F6] px-3 py-1.5 text-[12.5px] font-semibold text-ink-600 hover:bg-line-soft" title="채팅으로 돌아가기">
           <Icon name="x" :size="15" />채팅으로
@@ -369,6 +434,37 @@ export default {
             </div>
           </div>
         </template>
+
+        <!-- code: CodeMirror 6 신택스 하이라이팅 + 편집(단일 화면). lazy 로드.
+             :key 로 파일 전환 시 깔끔히 remount(스테일 상태 방지). -->
+        <div v-else-if="mode === 'code'" class="flex h-full min-h-0 flex-col">
+          <div class="relative min-h-0 flex-1 overflow-hidden">
+            <CodeMirrorEditor
+              :key="file.path"
+              :content="codeContent"
+              :language-hint="codeLanguageHint"
+              :extension="codeExtension"
+              :readonly="codeReadonly"
+              theme="light"
+              @update:content="onCodeInput"
+              @save="saveCode"
+            />
+          </div>
+          <!-- 상태 바: 저장 오류 또는 dirty/단축키 안내 -->
+          <div
+            v-if="saveError"
+            class="flex items-center gap-1.5 border-t border-line-soft bg-[#FCEEEE] px-4 py-2 text-[12px] font-semibold text-red-500"
+          >
+            <Icon name="alert" :size="14" />{{ saveError }}
+          </div>
+          <div
+            v-else
+            class="flex items-center justify-between border-t border-line-soft bg-[#FAFAFB] px-4 py-1.5 text-[11px] text-ink-400"
+          >
+            <span :class="codeDirty ? 'font-semibold text-amber-600' : ''">{{ codeReadonly ? "읽기 전용(오프라인)" : codeDirty ? "● 저장되지 않은 변경" : "변경 없음" }}</span>
+            <span>코드 · Ctrl/Cmd+S 로 저장</span>
+          </div>
+        </div>
 
         <!-- pdf -->
         <iframe v-else-if="mode === 'pdf_stream' && streamUrl" :src="streamUrl" class="h-full w-full border-0" title="PDF 미리보기"></iframe>

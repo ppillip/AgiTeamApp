@@ -22,7 +22,7 @@ class ArtifactFile(BaseModel):
     extension: str
     mime_type: str
     size_bytes: int
-    render_mode: str          # markdown | pdf_stream | converted_preview | unsupported
+    render_mode: str          # markdown | code | pdf_stream | image | html | converted_preview
     content_type: str
     encoding: str | None = None
     content: str | None = None
@@ -31,6 +31,7 @@ class ArtifactFile(BaseModel):
     download_allowed: bool = False
     sanitized: bool = False
     render_warnings: list[str] = []
+    language_hint: str | None = None   # code 모드 CodeMirror 언어 ID (json·python·bash·...)
 
 
 class ArtifactWriteRequest(BaseModel):

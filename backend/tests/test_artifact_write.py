@@ -26,8 +26,9 @@ def test_write_creates_parent_dirs(svc, art_root):
 
 
 def test_write_rejects_non_md(svc):
+    # .txt 등 코드/텍스트는 이제 허용 → 미지원 확장자(.exe)로 거절 검증
     with pytest.raises(WebguiError) as exc:
-        svc.write_file("02.설계/notes.txt", "x")
+        svc.write_file("02.설계/notes.exe", "x")
     assert exc.value.code == "invalid_artifact_type"
     assert exc.value.http_status == 400
 
@@ -84,7 +85,7 @@ def test_post_write_non_md_400(client):
     r = client.post(
         "/api/webgui/artifacts/write",
         params={"project_id": "TestProj"},
-        json={"path": "02.설계/notes.txt", "content": "x"},
+        json={"path": "02.설계/notes.exe", "content": "x"},   # 미지원 확장자(.txt 는 이제 허용)
     )
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "invalid_artifact_type"

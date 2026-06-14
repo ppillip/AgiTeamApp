@@ -57,6 +57,40 @@ _MIME = {
 # 17-3: 래스터 이미지 확장자 집합 (svg 는 텍스트라 별도 취급)
 _RASTER_EXTS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 
+# 코드/텍스트 뷰어 (코드탭, 제우스 2026-06-14, 아테나 설계).
+# 확장자 → CodeMirror language_hint. render_mode='code' 로 inline content + CodeMirror 표시/편집.
+# ⚠️ md/markdown(=markdown), html/htm(=html)은 코드모드에서 제외(여기 넣지 않음 → 현행 유지).
+_CODE_LANG = {
+    "json": "json",
+    "yaml": "yaml", "yml": "yaml",
+    "toml": "toml",
+    "ini": "ini", "cfg": "ini", "conf": "ini",
+    "py": "python",
+    "sh": "bash", "bash": "bash", "zsh": "bash",
+    "js": "javascript", "mjs": "javascript", "cjs": "javascript",
+    "ts": "typescript", "tsx": "typescript", "jsx": "javascript", "vue": "vue",
+    "css": "css", "scss": "scss", "sass": "sass", "less": "less",
+    "xml": "xml", "sql": "sql",
+    "go": "go", "rs": "rust", "java": "java", "kt": "kotlin",
+    "c": "c", "cpp": "cpp", "cc": "cpp", "h": "c", "hpp": "cpp",
+    "rb": "ruby", "php": "php", "pl": "perl", "lua": "lua", "r": "r",
+    "txt": "text", "log": "text", "csv": "text", "gitignore": "text",
+    # 확장자 없는 특수 파일명(아래 _CODE_FILENAMES 로 매핑되는 pseudo-ext)
+    "dockerfile": "dockerfile", "makefile": "makefile",
+}
+# 확장자 없는 코드 파일명 → pseudo-ext. (Dockerfile/Makefile). .gitignore 는 _ext 로 'gitignore' 잡힘.
+_CODE_FILENAMES = {"dockerfile": "dockerfile", "makefile": "makefile"}
+# code 확장자별 mime (대부분 text/plain, 구조화 포맷만 구체화). inline content 서빙이라 표시용.
+_CODE_MIME_OVERRIDE = {"json": "application/json", "xml": "application/xml", "csv": "text/csv"}
+
+# _RENDER_MODE/_MIME 를 코드 확장자로 보강(기존 md/html/pdf/image 항목은 setdefault 로 보존).
+for _ext_key, _lang in _CODE_LANG.items():
+    _RENDER_MODE.setdefault(_ext_key, "code")
+    _MIME.setdefault(_ext_key, _CODE_MIME_OVERRIDE.get(_ext_key, "text/plain"))
+
+# write 허용 확장자 = markdown + 코드/텍스트 allowlist (secret 은 resolve()가 먼저 차단).
+_WRITABLE_EXTS = frozenset({"md", "markdown"}) | frozenset(_CODE_LANG)
+
 # 숨김/secret 후보 (DS-20 §13.2, DS-40 §16.3). secret 은 include_hidden 여도 차단.
 _SECRET_NAME = re.compile(
     r"(?i)(^\.env($|\.)|secret|credential|\.pem$|\.key$|(^|[._-])token($|[._-])|"
@@ -75,6 +109,18 @@ def _ext(name: str) -> str | None:
     if "." not in name:
         return None
     return name.rsplit(".", 1)[1].lower()
+
+
+def _resolve_fmt_ext(name: str) -> str | None:
+    """형식 판정용 effective 확장자. 일반 확장자 우선, 없으면 특수 파일명(Dockerfile/Makefile) 매핑.
+
+    예: 'config.py'→'py', 'Dockerfile'→'dockerfile', 'Makefile'→'makefile', '.gitignore'→'gitignore'.
+    """
+    ext = _ext(name)
+    if ext is not None:
+        return ext
+    low = name.lower()
+    return _CODE_FILENAMES.get(low)
 
 
 class ArtifactService:
@@ -263,6 +309,8 @@ class ArtifactService:
     def _build_node(self, abs_path: Path, rel_path: str, *, is_dir: bool) -> dict:
         name = abs_path.name if rel_path else abs_path.name
         ext = None if is_dir else _ext(name)
+        # 형식 판정/렌더 가능 여부는 특수 파일명(Dockerfile/Makefile)까지 고려한 effective 확장자로.
+        fmt_ext = None if is_dir else _resolve_fmt_ext(name)
         size = None
         has_children = False
         renderable = False
@@ -276,13 +324,13 @@ class ArtifactService:
                 size = abs_path.stat().st_size
             except OSError:
                 size = None
-            renderable = ext in _RENDER_MODE
+            renderable = fmt_ext in _RENDER_MODE
         return {
             "path": rel_path,
             "name": name,
             "node_type": "directory" if is_dir else "file",
             "extension": ext,
-            "mime_type": (None if is_dir else _MIME.get(ext or "")),
+            "mime_type": (None if is_dir else _MIME.get(fmt_ext or "")),
             "size_bytes": size,
             "has_children": has_children,
             "renderable": renderable,
@@ -357,7 +405,7 @@ class ArtifactService:
             raise errors.not_file()
 
         name = rp.abs_path.name
-        ext = _ext(name)
+        ext = _resolve_fmt_ext(name)
         fmt = self.detect_format(rp.abs_path, ext)
         if fmt is None:
             raise errors.unsupported_media_type(detected=ext)
@@ -390,7 +438,21 @@ class ArtifactService:
             "download_allowed": False,
             "sanitized": False,
             "render_warnings": [],
+            "language_hint": None,        # code 모드에서만 채움(CodeMirror 언어 ID)
         }
+
+        if render_mode == "code":
+            # 코드/텍스트 파일: inline content(텍스트 decode) + language_hint. CodeMirror 로 표시/편집.
+            # 큰 파일 보호는 markdown 과 동일 정책(max_inline_bytes) 재사용.
+            if size > max_inline_bytes:
+                raise errors.file_too_large()
+            text = rp.abs_path.read_text(encoding="utf-8", errors="replace")
+            base["content"] = text
+            base["content_type"] = "text/plain; charset=utf-8"
+            base["encoding"] = "utf-8"
+            base["language_hint"] = _CODE_LANG.get(fmt, "text")
+            # 코드 본문은 sanitize 하지 않는다(HTML 렌더가 아니라 CodeMirror raw 표시).
+            return {"file": base, "status": 200}
 
         if render_mode == "markdown":
             if size > max_inline_bytes:
@@ -462,17 +524,19 @@ class ArtifactService:
         """산출물 .md 파일 저장.
 
         보안: resolve() 가 allowlist 루트 밖 접근(traversal/절대경로/symlink-escape/
-        secret/hidden)을 차단한다(GET 계열과 동일 경계). .md/.markdown 만 허용한다.
+        secret/hidden)을 차단한다(GET 계열과 동일 경계). 허용 확장자 = markdown + 코드/텍스트
+        allowlist(_WRITABLE_EXTS). secret(.env·key·pem·token·credential·settings.local.json)은
+        resolve() 가 먼저 차단하므로 allowlist 와 무관하게 쓰기 불가.
 
         - 경로 위반 → WebguiError(path_forbidden 403 등, resolve() 가 raise)
-        - .md 아님 → invalid_artifact_type(400)
+        - 허용 외 확장자 → invalid_artifact_type(400)
         - 대상이 디렉토리 → not_file(422)
         - 쓰기 실패 → artifact_write_failed(500)
         성공 시 {"saved": True, "path": <rel>} 반환.
         """
         rp = self.resolve(raw_path)
-        ext = _ext(rp.abs_path.name)
-        if ext not in ("md", "markdown"):
+        ext = _resolve_fmt_ext(rp.abs_path.name)
+        if ext not in _WRITABLE_EXTS:
             raise errors.invalid_artifact_type(detected=ext)
         # 기존 경로가 디렉토리면 덮어쓰기 금지
         if rp.abs_path.exists() and rp.abs_path.is_dir():
