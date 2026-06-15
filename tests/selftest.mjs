@@ -458,7 +458,7 @@ ok(msgWithAtt[0].attachments.length === 2 && msgWithAtt[0].attachments[0].attach
 ok(Array.isArray(msgWithAtt[1].attachments) && msgWithAtt[1].attachments.length === 0, "msg: 첨부 없으면 빈 배열");
 
 // ── 에이전트 깜빡 감쇠 인디케이터 (요구사항 15-1, DS-110 §8/§9) ──────────
-ok(ACTIVITY_BLINK_MS === 1500, "blink: 자연 정지 시간 1500ms");
+ok(ACTIVITY_BLINK_MS === 2000, "blink: 자연 정지 시간 2000ms(중간 끊김 완화, 유저 결정 2026-06-15)");
 
 // planActivityPulse: active pulse 만 깜빡을 만든다(가드 규칙)
 const NOW = 100000; // 가상 현재 시각(epoch ms)
@@ -491,9 +491,9 @@ ok(
   "blink: occurred_at 없어도 적용"
 );
 
-// isRecentlyActive: REST 폴백 degrade(last_active_at 1.5초 이내만 표시 유지, §9)
+// isRecentlyActive: REST 폴백 degrade(last_active_at blinkMs(2초) 이내만 표시 유지, §9)
 ok(isRecentlyActive(NOW - 1000, NOW) === true, "blink: REST degrade 1초 전 → 동작중 유지");
-ok(isRecentlyActive(NOW - 1500, NOW) === false, "blink: REST degrade 1.5초 경과 → 미유지");
+ok(isRecentlyActive(NOW - ACTIVITY_BLINK_MS, NOW) === false, "blink: REST degrade blinkMs(2초) 경과 → 미유지(경계)");
 ok(isRecentlyActive(null, NOW) === false, "blink: last_active_at 없음 → 미유지");
 ok(isRecentlyActive(NOW, NOW) === true, "blink: delta=0(경계) → 동작중(신선)");
 // ⚠️ 미래 시각 방어 회귀(유저 실측 2026-06-15): 서버 시계가 앞서 last_active_at>now → delta<0.
@@ -527,42 +527,42 @@ function fakeClock(start = 0) {
   };
 }
 
-// (1) 단일 pulse → active, blinkKey 증가, 1.5초 후 자가 idle
+// (1) 단일 pulse → active, blinkKey 증가, blinkMs(2초) 후 자가 idle
 {
   const clk = fakeClock(0);
-  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const b = createActivityBlinker({ blinkMs: ACTIVITY_BLINK_MS, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
   const room = { roomId: "r1", runtimeActivity: "unknown", activityBlinkKey: 0 };
   b.pulse(room, null);
   ok(room.runtimeActivity === "active" && room.activityBlinkKey === 1, "blink: pulse → active + blinkKey=1");
   ok(b.pending() === 1, "blink: idle 타이머 1건 예약");
-  clk.advance(1499);
-  ok(room.runtimeActivity === "active", "blink: 1.5초 직전엔 여전히 active");
+  clk.advance(ACTIVITY_BLINK_MS - 1);
+  ok(room.runtimeActivity === "active", "blink: blinkMs 직전엔 여전히 active");
   clk.advance(1);
-  ok(room.runtimeActivity === "idle" && b.pending() === 0, "blink: 1.5초 무신호 → 자가 idle 자연정지");
+  ok(room.runtimeActivity === "idle" && b.pending() === 0, "blink: blinkMs(2초) 무신호 → 자가 idle 자연정지");
 }
 
 // (2) 1초 간격 연속 pulse → 끊김 없이 active 유지(타이머 0 리셋)
 {
   const clk = fakeClock(0);
-  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const b = createActivityBlinker({ blinkMs: ACTIVITY_BLINK_MS, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
   const room = { roomId: "r2", runtimeActivity: "unknown", activityBlinkKey: 0 };
   b.pulse(room, null); // t=0
-  clk.advance(1000);   // t=1000 (<1500)
+  clk.advance(1000);   // t=1000 (<blinkMs)
   b.pulse(room, null); // 리셋
   clk.advance(1000);   // t=2000, 직전 pulse(1000) 기준 1000ms 경과 → 아직 active
   b.pulse(room, null); // 리셋
   ok(room.runtimeActivity === "active", "blink: 1초 간격 연속 pulse → 끊김 없이 active");
   ok(room.activityBlinkKey === 3, "blink: pulse 3회 → blinkKey=3(재시작 key)");
   ok(b.pending() === 1, "blink: 연속 pulse 중 타이머는 항상 1건(중복 누적 없음)");
-  // 마지막 pulse(t=2000) 후 멈추면 1.5초 뒤 idle
-  clk.advance(1500);
-  ok(room.runtimeActivity === "idle", "blink: 연속 후 멈추면 1.5초 뒤 idle");
+  // 마지막 pulse(t=2000) 후 멈추면 blinkMs(2초) 뒤 idle
+  clk.advance(ACTIVITY_BLINK_MS);
+  ok(room.runtimeActivity === "idle", "blink: 연속 후 멈추면 blinkMs(2초) 뒤 idle");
 }
 
 // (3) cancelAll → 진행 중 타이머 정리(프로젝트 전환/종료)
 {
   const clk = fakeClock(0);
-  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const b = createActivityBlinker({ blinkMs: ACTIVITY_BLINK_MS, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
   const room = { roomId: "r3", runtimeActivity: "unknown", activityBlinkKey: 0 };
   b.pulse(room, null);
   ok(b.pending() === 1, "blink: cancelAll 전 타이머 1건");
@@ -575,14 +575,14 @@ function fakeClock(start = 0) {
 {
   const T = 500000;
   const clk = fakeClock(T);
-  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const b = createActivityBlinker({ blinkMs: ACTIVITY_BLINK_MS, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
   const room = { roomId: "r4", runtimeActivity: "unknown", activityBlinkKey: 0 };
   // occurred_at 을 10분 과거로 넘겨도 무시 — lastActivityPulseAt 은 수신 시각(now=T)
   b.pulse(room, T - 600000);
   ok(room.lastActivityPulseAt === T, "blink: lastActivityPulseAt = 수신 시각(now), occurred_at 무시");
   ok(cardActivityState(room, { degraded: false, now: T })?.active === true, "blink+card: occurred_at 과거여도 수신 직후 동작중(clock skew 회귀)");
-  ok(cardActivityState(room, { degraded: false, now: T + 1499 })?.active === true, "blink+card: 수신 1.5초 직전 동작중");
-  ok(cardActivityState(room, { degraded: false, now: T + 1500 }) === null, "blink+card: 수신 1.5초 경과 → 자연정지");
+  ok(cardActivityState(room, { degraded: false, now: T + ACTIVITY_BLINK_MS - 1 })?.active === true, "blink+card: 수신 blinkMs(2초) 직전 동작중");
+  ok(cardActivityState(room, { degraded: false, now: T + ACTIVITY_BLINK_MS }) === null, "blink+card: 수신 blinkMs(2초) 경과 → 자연정지");
 }
 
 // ── cardActivityState: connection 게이트 제거 회귀 (PM 긴급 2026-06-15) ──────────
@@ -597,12 +597,12 @@ ok(
   cardActivityState({ lastActivityPulseAt: NOW, connectionState: "connected" }, { degraded: false, now: NOW })?.active === true,
   "card: connected + WS pulse 신선 → 동작중"
 );
-// WS pulse 1.5초 경과 → 자연 정지(null)
+// WS pulse blinkMs(2초) 경과 → 자연 정지(null)
 ok(
-  cardActivityState({ lastActivityPulseAt: NOW - 1500 }, { degraded: false, now: NOW }) === null,
-  "card: WS pulse 1.5초 경과 → 자연 정지(null)"
+  cardActivityState({ lastActivityPulseAt: NOW - ACTIVITY_BLINK_MS }, { degraded: false, now: NOW }) === null,
+  "card: WS pulse blinkMs(2초) 경과 → 자연 정지(null)"
 );
-// REST degrade: disconnected 여도 last_active_at 1.5초 이내면 동작중
+// REST degrade: disconnected 여도 last_active_at blinkMs(2초) 이내면 동작중
 ok(
   cardActivityState({ runtimeActivity: "unknown", connectionState: "disconnected", lastActiveAt: NOW - 1000 }, { degraded: false, now: NOW })?.active === true,
   "card: disconnected + last_active_at 1초전 → 동작중(REST degrade)"
@@ -632,10 +632,10 @@ ok(
   cardActivityState({ lastActivityPulseAt: NOW, connectionState: "connected" }, { degraded: true, now: NOW }) === null,
   "card: degraded(mock) → 신선 pulse 여도 null(가짜 깜빡 금지)"
 );
-// last_active_at 1.5초 경과 + unknown → null(자연 정지 후)
+// last_active_at blinkMs(2초) 경과 + unknown → null(자연 정지 후)
 ok(
-  cardActivityState({ runtimeActivity: "unknown", lastActiveAt: NOW - 1500 }, { degraded: false, now: NOW }) === null,
-  "card: last_active_at 1.5초 경과 → 표식 없음(자연정지)"
+  cardActivityState({ runtimeActivity: "unknown", lastActiveAt: NOW - ACTIVITY_BLINK_MS }, { degraded: false, now: NOW }) === null,
+  "card: last_active_at blinkMs(2초) 경과 → 표식 없음(자연정지)"
 );
 
 // ── 결과 ────────────────────────────────────────────────────

@@ -5,13 +5,15 @@
 //
 // 모델(DS-110 §8.2, PM 확정 UX):
 //  - 서버는 `active` pulse 만 의미 있는 신호로 보낸다. FE 는 그 신호 1건마다 깜빡을 재시작한다.
-//  - pulse 수신 → runtimeActivity='active', activityBlinkKey+1, 1500ms 타이머 리셋.
-//  - 1500ms 동안 새 pulse 가 없으면 클라가 스스로 idle 로 자연 정지한다(서버발 idle 미수신 전제).
+//  - pulse 수신 → runtimeActivity='active', activityBlinkKey+1, 2000ms 타이머 리셋.
+//  - 2000ms 동안 새 pulse 가 없으면 클라가 스스로 idle 로 자연 정지한다(서버발 idle 미수신 전제).
 //  - 서버발 idle 이벤트는 무시한다(되살아나도 무시 — §9 마지막 규칙).
-//  - WS 재연결 gap replay 로 받은 과거 pulse(occurred_at 이 now 기준 1500ms+ 오래됨)는 재시작하지 않는다.
+//  - WS 재연결 gap replay 로 받은 과거 pulse(occurred_at 이 now 기준 2000ms+ 오래됨)는 재시작하지 않는다.
 
-// 깜빡이 자연 정지하기까지의 시간(ms). poller 주기(1000ms)보다 길어 연속 출력 중엔 끊기지 않는다.
-export const ACTIVITY_BLINK_MS = 1500;
+// 깜빡이 자연 정지하기까지의 시간(ms). poller 는 화면 변경 시에만 pulse 를 보내 간격이 들쭉날쭉한데,
+// 1500ms 였을 때 동작 중에도 pulse 간격이 그를 넘는 순간 깜빡이 잠깐 멈췄다 재시작하는 '중간 끊김'이
+// 있었다(유저 실측 2026-06-15). 2000ms 로 늘려 완화한다(CSS 0.4s × 약 5회 = 2초, 새 pulse 시 0 리셋).
+export const ACTIVITY_BLINK_MS = 2000;
 
 // 안전 파서: ISO 문자열/epoch(ms) → epoch(ms) 또는 NaN.
 function toEpoch(t) {
@@ -36,7 +38,7 @@ function toEpoch(t) {
 //   (실측: now - occurred_at = 231초 → stale_replay 로 차단 → 깜빡 0). 게다가 현재 backend
 //   runtime_activity_service 는 DB write 0·실시간 push only 라 gap replay 자체를 하지 않는다(§8.2 전제 부재).
 //   → 신선도 기준은 '수신 시각(now)'으로 일원화한다(blinker.pulse 가 lastActivityPulseAt=now 세움).
-//   설령 과거 pulse 가 와도 1.5초 후 자연 정지하므로 폭탄 방어는 그대로 성립한다.
+//   설령 과거 pulse 가 와도 2초 후 자연 정지하므로 폭탄 방어는 그대로 성립한다.
 export function planActivityPulse(payload, occurredAt, ctx = {}) {
   if (!payload) return { apply: false, reason: "no_payload" };
   // active 신호만 깜빡을 만든다. 서버발 idle/unknown 은 무시한다.
@@ -70,10 +72,10 @@ export function isRecentlyActive(lastActiveAt, now, blinkMs = ACTIVITY_BLINK_MS)
 // ⚠️ connection 게이트 없음(PM 긴급 2026-06-15): connectionState 로 깜빡을 막지 않는다.
 //   폴러의 runtime_activity=active(WS pulse)는 '지금 실제 출력이 있었다'는 직접 관측이므로,
 //   연결 디스커버리 상태(cmux pane 발견)와 독립적으로 깜빡해야 한다. 죽은 팀은 pulse 가 안 와
-//   1.5초 뒤 자연 정지하므로 오작동 없음. 단 degraded(mock)만 제외한다(가짜 깜빡 금지).
+//   2초 뒤 자연 정지하므로 오작동 없음. 단 degraded(mock)만 제외한다(가짜 깜빡 금지).
 export function cardActivityState(room, ctx = {}) {
   if (!room || ctx.degraded) return null;
-  // 반응성 heartbeat 는 store.nowTick(ctx.now) 의존으로 유지(컴포넌트가 매초 재평가 → 1.5초 자가정지).
+  // 반응성 heartbeat 는 store.nowTick(ctx.now) 의존으로 유지(컴포넌트가 매초 재평가 → 2초 자가정지).
   // 단 WS pulse 는 blinker.pulse 가 Date.now() 로 찍는 즉시값이고 store.nowTick 은 최대 1초 늦을 수 있어,
   // lastActivityPulseAt 이 ctx.now 보다 살짝 미래면 WS 판정에 한해 now 를 pulse 시각까지 끌어올린다.
   // REST lastActiveAt 은 서버 시각이므로 이 보정을 적용하지 않는다(미래 시각 영구 깜빡 방어 유지).
@@ -83,7 +85,7 @@ export function cardActivityState(room, ctx = {}) {
   const blinkMs = ctx.blinkMs ?? ACTIVITY_BLINK_MS;
   // '동작중' 판정은 시각 기반(DS-110 §8.2/§9):
   //   - lastActivityPulseAt: WS pulse 가 blinker.pulse 로 세운 시각(주경로). 신선하면 깜빡 중.
-  //   - lastActiveAt: REST degrade hint. now-1.5초 이내만 유지(§9).
+  //   - lastActiveAt: REST degrade hint. now-2초 이내만 유지(§9).
   // ⚠️ REST runtime_activity='active' 필드는 단독 신뢰 금지: backend 가 idle 을 발행하지 않아(§3.2)
   //   registry 가 마지막 active 로 굳어 stale('동작 멈췄는데 active')일 수 있다. 시각으로만 판정한다.
   if (
