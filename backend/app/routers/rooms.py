@@ -29,11 +29,25 @@ async def _last_message(db: AsyncSession, room):
     return await repo.get_message(db, room.last_message_id)
 
 
+def _activity_fields(project_id: str, role_id: str):
+    """요구사항 15-1 REST degrade (DS-110 §9.1): (runtime_activity, last_active_at).
+
+    read-screen poller pulse 를 우선 읽는다(있으면 active + last_active_at). pulse 가 없으면
+    구 log_collector offset 모델값으로 폴백한다. FE 는 last_active_at 1.5초 윈도로 표시 판정.
+    """
+    p = activity_registry.pulse(project_id, role_id)
+    if p is not None:
+        return p.runtime_activity, p.last_active_at
+    return activity_registry.get(project_id, role_id), None
+
+
 def _with_connection(d: dict, project_id: str, role_id: str) -> dict:
     info = registry.resolve(project_id, role_id)
     d["connection_state"] = info.connection_state if info else "disconnected"
     # 동작중/조용함 현재값을 REST 응답에도 실어 초기 로드/재연결 시 FE 가 즉시 반영 (요구사항 15-1)
-    d["runtime_activity"] = activity_registry.get(project_id, role_id)
+    act, last_active = _activity_fields(project_id, role_id)
+    d["runtime_activity"] = act
+    d["last_active_at"] = last_active
     return d
 
 
@@ -100,6 +114,7 @@ async def list_messages(
     cs = session.collector_state if session else "unknown"
     conn = registry.resolve(room.project_id, room.role_id)
     conn_state = conn.connection_state if conn else "disconnected"
+    _act, _last_active = _activity_fields(room.project_id, room.role_id)
     next_cursor = (
         f"{rows[-1].occurred_at.isoformat()}|message:{rows[-1].message_id}" if rows and has_more else None
     )
@@ -110,7 +125,8 @@ async def list_messages(
                 last,
                 cs,
                 connection_state=conn_state,
-                runtime_activity=activity_registry.get(room.project_id, room.role_id),
+                runtime_activity=_act,
+                last_active_at=_last_active,
             ),
             "messages": [
                 message_to_dict(

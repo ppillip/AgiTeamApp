@@ -21,6 +21,13 @@ import {
   connectionInfo,
 } from "../src/api/adapters.js";
 import { parentOf, planArtifactChange, folderHasUnseenChange } from "../src/stores/artifactChange.js";
+import {
+  planActivityPulse,
+  isRecentlyActive,
+  createActivityBlinker,
+  cardActivityState,
+  ACTIVITY_BLINK_MS,
+} from "../src/stores/activityBlink.js";
 import { adaptAttachment } from "../src/api/adapters.js";
 import {
   isAllowedImageType,
@@ -449,6 +456,187 @@ const msgWithAtt = adaptMessages([
 ]);
 ok(msgWithAtt[0].attachments.length === 2 && msgWithAtt[0].attachments[0].attachmentId === "a1" && msgWithAtt[0].attachments[1].attachmentId === "a2", "msg: attachments 순서 보존 흡수");
 ok(Array.isArray(msgWithAtt[1].attachments) && msgWithAtt[1].attachments.length === 0, "msg: 첨부 없으면 빈 배열");
+
+// ── 에이전트 깜빡 감쇠 인디케이터 (요구사항 15-1, DS-110 §8/§9) ──────────
+ok(ACTIVITY_BLINK_MS === 1500, "blink: 자연 정지 시간 1500ms");
+
+// planActivityPulse: active pulse 만 깜빡을 만든다(가드 규칙)
+const NOW = 100000; // 가상 현재 시각(epoch ms)
+const PULSE_CTX = { selectedProjectId: "Panthea", now: NOW };
+ok(
+  planActivityPulse({ runtime_activity: "active", project_id: "Panthea", role: "QA" }, NOW, PULSE_CTX).apply === true,
+  "blink: active pulse → 적용"
+);
+ok(
+  planActivityPulse({ runtime_activity: "idle", project_id: "Panthea", role: "QA" }, NOW, PULSE_CTX).reason === "not_active",
+  "blink: 서버발 idle → 무시(not_active)"
+);
+ok(
+  planActivityPulse({ runtime_activity: "unknown", project_id: "Panthea" }, NOW, PULSE_CTX).apply === false,
+  "blink: unknown → 무시"
+);
+ok(planActivityPulse(null, NOW, PULSE_CTX).reason === "no_payload", "blink: payload 없음 방어");
+ok(
+  planActivityPulse({ runtime_activity: "active", project_id: "Other", role: "QA" }, NOW, PULSE_CTX).reason === "other_project",
+  "blink: 타 프로젝트 pulse → 무시(other_project)"
+);
+// ⚠️ occurred_at 절대비교 가드 제거(실측 2026-06-15): 서버-브라우저 clock skew 로 실시간 pulse 의
+//   occurred_at 이 과거로 찍혀도 차단하지 않는다(수신 시각 기준). backend 는 replay 안 함(§8.2 전제 부재).
+ok(
+  planActivityPulse({ runtime_activity: "active", project_id: "Panthea" }, NOW - 600000, PULSE_CTX).apply === true,
+  "blink: occurred_at 10분 과거(clock skew)여도 적용(stale 가드 제거)"
+);
+ok(
+  planActivityPulse({ runtime_activity: "active", project_id: "Panthea" }, null, PULSE_CTX).apply === true,
+  "blink: occurred_at 없어도 적용"
+);
+
+// isRecentlyActive: REST 폴백 degrade(last_active_at 1.5초 이내만 표시 유지, §9)
+ok(isRecentlyActive(NOW - 1000, NOW) === true, "blink: REST degrade 1초 전 → 동작중 유지");
+ok(isRecentlyActive(NOW - 1500, NOW) === false, "blink: REST degrade 1.5초 경과 → 미유지");
+ok(isRecentlyActive(null, NOW) === false, "blink: last_active_at 없음 → 미유지");
+ok(isRecentlyActive(NOW, NOW) === true, "blink: delta=0(경계) → 동작중(신선)");
+// ⚠️ 미래 시각 방어 회귀(유저 실측 2026-06-15): 서버 시계가 앞서 last_active_at>now → delta<0.
+//   방어 전엔 'now-ts<blinkMs' 가 영구 참이라 발사 멈춰도 안 멈췄다(사이드바·헤더·상단 3곳 영구 깜빡).
+ok(isRecentlyActive(NOW + 5000, NOW) === false, "blink: 미래 last_active_at(서버 clock 앞섬) → false(영구 깜빡 방어)");
+ok(cardActivityState({ lastActiveAt: NOW + 600000 }, { degraded: false, now: NOW }) === null, "card: 미래 last_active_at(10분 앞) → null(영구 깜빡 방어)");
+
+// createActivityBlinker: fake clock 으로 타이머 리셋·자연정지 검증
+function fakeClock(start = 0) {
+  let t = start;
+  let seq = 0;
+  const timers = new Map();
+  return {
+    now: () => t,
+    setTimer: (fn, ms) => {
+      const id = ++seq;
+      timers.set(id, { fn, at: t + ms });
+      return id;
+    },
+    clearTimer: (id) => timers.delete(id),
+    advance: (ms) => {
+      t += ms;
+      for (const [id, e] of [...timers]) {
+        if (e.at <= t) {
+          timers.delete(id);
+          e.fn();
+        }
+      }
+    },
+    live: () => timers.size,
+  };
+}
+
+// (1) 단일 pulse → active, blinkKey 증가, 1.5초 후 자가 idle
+{
+  const clk = fakeClock(0);
+  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const room = { roomId: "r1", runtimeActivity: "unknown", activityBlinkKey: 0 };
+  b.pulse(room, null);
+  ok(room.runtimeActivity === "active" && room.activityBlinkKey === 1, "blink: pulse → active + blinkKey=1");
+  ok(b.pending() === 1, "blink: idle 타이머 1건 예약");
+  clk.advance(1499);
+  ok(room.runtimeActivity === "active", "blink: 1.5초 직전엔 여전히 active");
+  clk.advance(1);
+  ok(room.runtimeActivity === "idle" && b.pending() === 0, "blink: 1.5초 무신호 → 자가 idle 자연정지");
+}
+
+// (2) 1초 간격 연속 pulse → 끊김 없이 active 유지(타이머 0 리셋)
+{
+  const clk = fakeClock(0);
+  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const room = { roomId: "r2", runtimeActivity: "unknown", activityBlinkKey: 0 };
+  b.pulse(room, null); // t=0
+  clk.advance(1000);   // t=1000 (<1500)
+  b.pulse(room, null); // 리셋
+  clk.advance(1000);   // t=2000, 직전 pulse(1000) 기준 1000ms 경과 → 아직 active
+  b.pulse(room, null); // 리셋
+  ok(room.runtimeActivity === "active", "blink: 1초 간격 연속 pulse → 끊김 없이 active");
+  ok(room.activityBlinkKey === 3, "blink: pulse 3회 → blinkKey=3(재시작 key)");
+  ok(b.pending() === 1, "blink: 연속 pulse 중 타이머는 항상 1건(중복 누적 없음)");
+  // 마지막 pulse(t=2000) 후 멈추면 1.5초 뒤 idle
+  clk.advance(1500);
+  ok(room.runtimeActivity === "idle", "blink: 연속 후 멈추면 1.5초 뒤 idle");
+}
+
+// (3) cancelAll → 진행 중 타이머 정리(프로젝트 전환/종료)
+{
+  const clk = fakeClock(0);
+  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const room = { roomId: "r3", runtimeActivity: "unknown", activityBlinkKey: 0 };
+  b.pulse(room, null);
+  ok(b.pending() === 1, "blink: cancelAll 전 타이머 1건");
+  b.cancelAll();
+  ok(b.pending() === 0 && clk.live() === 0, "blink: cancelAll → 타이머 전부 정리");
+}
+
+// (4) ⚠️ 실측 차단점 회귀: occurred_at(서버 시계)이 과거여도 pulse 는 '수신 시각(now)' 기준으로 신선 →
+//     cardActivityState 가 '동작중' 을 반환해야 한다(clock skew 차단 버그 수정 검증).
+{
+  const T = 500000;
+  const clk = fakeClock(T);
+  const b = createActivityBlinker({ blinkMs: 1500, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
+  const room = { roomId: "r4", runtimeActivity: "unknown", activityBlinkKey: 0 };
+  // occurred_at 을 10분 과거로 넘겨도 무시 — lastActivityPulseAt 은 수신 시각(now=T)
+  b.pulse(room, T - 600000);
+  ok(room.lastActivityPulseAt === T, "blink: lastActivityPulseAt = 수신 시각(now), occurred_at 무시");
+  ok(cardActivityState(room, { degraded: false, now: T })?.active === true, "blink+card: occurred_at 과거여도 수신 직후 동작중(clock skew 회귀)");
+  ok(cardActivityState(room, { degraded: false, now: T + 1499 })?.active === true, "blink+card: 수신 1.5초 직전 동작중");
+  ok(cardActivityState(room, { degraded: false, now: T + 1500 }) === null, "blink+card: 수신 1.5초 경과 → 자연정지");
+}
+
+// ── cardActivityState: connection 게이트 제거 회귀 (PM 긴급 2026-06-15) ──────────
+// ⚠️ 핵심 회귀: disconnected(연결 디스커버리 실패) 여도 active pulse 면 '동작중' 깜빡해야 한다.
+//   폴러의 active 는 직접 관측 — connection 상태와 독립(BeanNote 가 다른 cmux 에 떠도 깜빡).
+// WS pulse 상태(blinker 가 lastActivityPulseAt 세움): connection 무관하게 동작중(게이트 제거)
+ok(
+  cardActivityState({ lastActivityPulseAt: NOW, connectionState: "disconnected" }, { degraded: false, now: NOW })?.active === true,
+  "card: disconnected + WS pulse 신선 → 동작중(connection 게이트 제거)"
+);
+ok(
+  cardActivityState({ lastActivityPulseAt: NOW, connectionState: "connected" }, { degraded: false, now: NOW })?.active === true,
+  "card: connected + WS pulse 신선 → 동작중"
+);
+// WS pulse 1.5초 경과 → 자연 정지(null)
+ok(
+  cardActivityState({ lastActivityPulseAt: NOW - 1500 }, { degraded: false, now: NOW }) === null,
+  "card: WS pulse 1.5초 경과 → 자연 정지(null)"
+);
+// REST degrade: disconnected 여도 last_active_at 1.5초 이내면 동작중
+ok(
+  cardActivityState({ runtimeActivity: "unknown", connectionState: "disconnected", lastActiveAt: NOW - 1000 }, { degraded: false, now: NOW })?.active === true,
+  "card: disconnected + last_active_at 1초전 → 동작중(REST degrade)"
+);
+// ⚠️ §9 회귀: REST runtime_activity='active' 라도 last_active_at 이 stale 이면 표시 안 함(단독 신뢰 금지)
+ok(
+  cardActivityState({ runtimeActivity: "active", lastActiveAt: NOW - 600000 }, { degraded: false, now: NOW }) === null,
+  "card: REST stale active(10분전 last_active_at) → null(§9, runtime_activity 단독 신뢰 금지)"
+);
+ok(
+  cardActivityState({ runtimeActivity: "active" }, { degraded: false, now: NOW }) === null,
+  "card: runtime_activity=active 만 있고 시각 없음 → null(§9)"
+);
+// idle → { active:false } + 라벨 없음 (유저 요청 2026-06-15: '조용함' 표기 금지, 'LIVE'만)
+{
+  const idleState = cardActivityState({ runtimeActivity: "idle", connectionState: "disconnected" }, { degraded: false, now: NOW });
+  ok(idleState?.active === false, "card: idle → active:false(점 색 구분만)");
+  ok(idleState?.label === undefined, "card: idle → 라벨 없음('조용함' 표기 금지)");
+}
+// unknown → 표식 없음(null)
+ok(
+  cardActivityState({ runtimeActivity: "unknown", connectionState: "connected" }, { degraded: false, now: NOW }) === null,
+  "card: unknown → 표식 없음"
+);
+// degraded(mock) 는 신선 pulse 여도 제외(가짜 깜빡 금지)
+ok(
+  cardActivityState({ lastActivityPulseAt: NOW, connectionState: "connected" }, { degraded: true, now: NOW }) === null,
+  "card: degraded(mock) → 신선 pulse 여도 null(가짜 깜빡 금지)"
+);
+// last_active_at 1.5초 경과 + unknown → null(자연 정지 후)
+ok(
+  cardActivityState({ runtimeActivity: "unknown", lastActiveAt: NOW - 1500 }, { degraded: false, now: NOW }) === null,
+  "card: last_active_at 1.5초 경과 → 표식 없음(자연정지)"
+);
 
 // ── 결과 ────────────────────────────────────────────────────
 console.log(`\nselftest: ${pass} passed, ${fail} failed`);

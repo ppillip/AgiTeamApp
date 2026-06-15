@@ -8,6 +8,7 @@ import ArtifactViewer from "./components/ArtifactViewer.vue";
 import TeamView from "./components/TeamView.vue";
 import RoomSwitcher from "./components/RoomSwitcher.vue";
 import { store, boot, teardown, selectedProject, selectRoom, loadRoomPreviews } from "./stores/monitor.js";
+import { cardActivityState } from "./stores/activityBlink.js";
 
 // 메인 셸 (S-01): 헤더(프로젝트 선택·연결상태) + 좌(채팅방)·중(대화)·우(산출물) 3분할.
 // 모든 데이터는 선택 project_id 기준(store). 백엔드 미연결 시 degraded(목업) 배너 표시.
@@ -37,6 +38,14 @@ export default {
     },
     pmConnected() {
       return !!this.project && this.project.pmConnected;
+    },
+    // 헤더 'LIVE · PM' 점의 런타임 활동(요구사항 15-1, DS-110 §8.3 확장). PM 방은 store.rooms 의
+    //   reactive 객체 → applyRuntimeActivity 의 깜빡 갱신이 그대로 반영된다.
+    pmRoom() {
+      return store.rooms.find((r) => r.isPM) || null;
+    },
+    pmActivity() {
+      return cardActivityState(this.pmRoom, { degraded: store.degraded, now: store.nowTick });
     },
   },
   methods: {
@@ -195,7 +204,9 @@ export default {
           :class="pmConnected ? 'border-grn-tintbd bg-grn-tint text-grn' : 'border-line bg-line-soft text-ink-500'"
           :title="pmConnected ? 'PM 방 실시간 연결됨' : 'PM surface 미발견(끊김)'"
         >
-          <span class="h-[7px] w-[7px] rounded-full" :class="pmConnected ? 'bg-grn ring-[3px] ring-grn/20' : 'bg-ink-300'"></span>
+          <span class="h-[7px] w-[7px] rounded-full"
+                :key="'pmblink-' + (pmRoom ? (pmRoom.activityBlinkKey || 0) : 0)"
+                :class="[pmConnected ? 'bg-grn ring-[3px] ring-grn/20' : 'bg-ink-300', pmActivity && pmActivity.active ? 'animate-activity-blink' : '']"></span>
           {{ pmConnected ? "LIVE" : "끊김" }} · PM
         </span>
       </div>

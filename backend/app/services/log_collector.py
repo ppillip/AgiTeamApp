@@ -37,6 +37,9 @@ _CANON_ROLES = {"PM", "Architect", "DeveloperBE", "DeveloperFE", "Designer", "QA
 RAW_LOG_SOURCE = "raw_log_collector"
 RAW_TUI_EVENT = "raw_tui_capture"
 
+# 요구사항 15-1 (B)폴러 모델 — read-screen poller active pulse source (DS-110 §6.2/§10.1, DS-30 enum).
+READ_SCREEN_POLLER_SOURCE = "read_screen_poller"
+
 # 에이전트 동작중/조용함 liveness (요구사항 15-1, DS-30 runtime_activity_changed).
 # 본문 파싱·작업의미 판정 금지 — 순수 offset 증가 여부만. active=출력 있었음, idle=조용함.
 RUNTIME_ACTIVITY_EVENT = "runtime_activity_changed"
@@ -95,15 +98,41 @@ def decide_activity(
     return None
 
 
-class ActivityRegistry:
-    """(project_id, role) → ActivityState 인메모리 저장 (cmux discovery registry 패턴).
+@dataclass
+class PulseState:
+    """요구사항 15-1 (B)폴러 모델 active pulse 의 최신 관측값 (DS-110 §6.2.4 / §9.1).
 
-    LogCollector 가 갱신하고, REST 방 목록(rooms 라우터)이 현재값을 읽는다(초기 로드/재연결
-    시 FE 즉시 반영). 단일 프로세스 MVP — 프로세스 재시작 시 unknown 으로 초기화된다.
+    read-screen poller endpoint 가 갱신한다. log_collector 의 offset 기반 ActivityState 와
+    **별도 저장소**로 분리해, 기존 active→idle(6초) 모델이 본 경로 표시를 끄지 못하게 한다
+    (DS-110 §3.2 / §12.1). REST degrade(last_active_at 1.5초 윈도) + 중복 hash 판정에 쓴다.
+    """
+
+    runtime_activity: str = ACTIVITY_ACTIVE
+    last_active_at: datetime | None = None
+    last_activity_hash: str | None = None
+
+
+def is_activity_role(role: str) -> bool:
+    """요구사항 15-1 활동 관측 대상 role 인지 (DS-110 §4.3/§12.1).
+
+    PM 포함 7역할만 대상. `Monitor` pane·미지원 role 은 제외한다.
+    """
+    return role in _CANON_ROLES
+
+
+class ActivityRegistry:
+    """(project_id, role) → 활동상태 인메모리 저장 (cmux discovery registry 패턴).
+
+    두 축을 분리 보존한다:
+    - `_map` (ActivityState): log_collector 의 role.log offset 기반 active↔idle (구 모델).
+    - `_pulse` (PulseState): 요구사항 15-1 read-screen poller active pulse (DS-110 (B)모델).
+    REST 방 목록(rooms 라우터)은 pulse 를 우선 읽어 초기 로드/재연결 시 FE 즉시 반영한다.
+    단일 프로세스 MVP — 프로세스 재시작 시 비워진다.
     """
 
     def __init__(self) -> None:
         self._map: dict[tuple[str, str], ActivityState] = {}
+        self._pulse: dict[tuple[str, str], PulseState] = {}
 
     def state(self, project_id: str, role: str) -> ActivityState:
         return self._map.setdefault((project_id, role), ActivityState())
@@ -111,6 +140,22 @@ class ActivityRegistry:
     def get(self, project_id: str, role: str) -> str:
         st = self._map.get((project_id, role))
         return st.activity if st else ACTIVITY_UNKNOWN
+
+    # --- 요구사항 15-1 poller pulse (DS-110 §6.2.4 / §9.1) ---------------------
+
+    def pulse(self, project_id: str, role: str) -> PulseState | None:
+        """현재 (project, role) 의 최신 active pulse. 없으면 None."""
+        return self._pulse.get((project_id, role))
+
+    def set_pulse(
+        self, project_id: str, role: str, *, last_active_at: datetime, snapshot_hash: str
+    ) -> None:
+        """DB 저장 성공 이후에만 호출 — 실패 시 미갱신이라 같은 hash 재시도가 처리된다(§5.3/§12.1)."""
+        self._pulse[(project_id, role)] = PulseState(
+            runtime_activity=ACTIVITY_ACTIVE,
+            last_active_at=last_active_at,
+            last_activity_hash=snapshot_hash,
+        )
 
 
 # 모듈 싱글톤 — rooms 라우터가 읽는다.

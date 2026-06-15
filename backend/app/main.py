@@ -90,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(rooms.router)
     app.include_router(collector.router)
     app.include_router(collector.hook_router)
+    app.include_router(collector.activity_router)
     app.include_router(artifacts.router)
 
     @app.get("/healthz", tags=["meta"])

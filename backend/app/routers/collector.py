@@ -8,14 +8,30 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..deps import get_db, require_collector_auth
-from ..schemas.collector import CollectEventRequest, CollectMessageRequest, HookCollectRequest
+from ..schemas.collector import (
+    CollectEventRequest,
+    CollectMessageRequest,
+    HookCollectRequest,
+    RuntimeActivityCollectRequest,
+)
 from ..schemas.common import ok
-from ..services import collector_service
+from ..services import collector_service, runtime_activity_service
 
 router = APIRouter(prefix="/api/webgui/internal/rooms", tags=["collector"])
 
 # AGENT_ID 라우팅 hook 수집 (room_id 미지정 — 방은 백엔드가 upsert). 닭달걀 해소.
 hook_router = APIRouter(prefix="/api/webgui/internal/hook", tags=["collector"])
+
+# 요구사항 15-1 read-screen poller active pulse 수신 (DS-110 §6). FE 비호출, collector 전용 인증.
+activity_router = APIRouter(prefix="/api/webgui/internal/runtime-activity", tags=["collector"])
+
+
+@activity_router.post("/collect", dependencies=[Depends(require_collector_auth)])
+async def collect_runtime_activity(body: RuntimeActivityCollectRequest, response: Response):
+    # liveness 는 휘발성 — DB 미접근(room/event 저장 없음). get_db 의존성도 걸지 않는다.
+    result = await runtime_activity_service.collect_runtime_activity(body)
+    response.status_code = 201
+    return ok(result)
 
 
 @hook_router.post("/collect", dependencies=[Depends(require_collector_auth)])

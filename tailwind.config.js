@@ -8,6 +8,8 @@ export default {
       fontFamily: {
         sans: ["Pretendard", "system-ui", "-apple-system", "sans-serif"],
       },
+      // 에이전트 동작중 깜빡 감쇠(요구사항 15-1, DS-110 §8.1)는 src/style.css 에 plain CSS 로 직접 정의한다.
+      //   (tailwind JIT extend 는 dev 런타임 번들에 keyframe 이 누락되는 사례가 있어 style.css 로 이전 — 실측 수정)
       colors: {
         amber: {
           DEFAULT: "#DD6B1F", // 주요 액센트 · 선택 아바타 · 전송 버튼

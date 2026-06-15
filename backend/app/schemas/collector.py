@@ -34,7 +34,7 @@ class CollectEventRequest(BaseModel):
     message_id: str | None = None
     correlation_id: str | None = None
     event_type: str | None = None             # 미지정 시 hook_normalizer 가 provider+event_name 으로 정규화
-    source: str               # cmux_adapter | conversation_collector | transcript_parser | raw_log_collector | hook | read_screen | backend | artifact_service | postgres_notify
+    source: str               # cmux_adapter | conversation_collector | transcript_parser | raw_log_collector | read_screen_poller | hook | read_screen | backend | artifact_service | postgres_notify
     hook_provider: str | None = None
     hook_event_name: str | None = None
     severity: str = "info"
@@ -73,3 +73,28 @@ class HookCollectRequest(BaseModel):
     hook_stdin: dict | None = None             # 계약 §2: 원본 hook stdin 보강(있으면 hint 병합)
     payload: dict | None = None                # round-1 별칭
     occurred_at: datetime | None = None
+
+
+class RuntimeActivityCollectRequest(BaseModel):
+    """요구사항 15-1 read-screen poller active pulse 수신 body (DS-110 §5.4 field contract).
+
+    poller 가 `agiteam.id` 를 읽어 1초 read-screen diff 로 출력 변화를 감지하면 발신한다.
+    `activity` 는 항상 `active`(edge-triggered pulse) 이며 서버는 idle 을 발행하지 않는다.
+    raw screen 원문은 절대 싣지 않는다 — normalized snapshot 의 hash/byte 길이만 운반한다.
+    런처/poller 가 보내는 top-level 필드를 그대로 수용하고, 미지 필드는 무시한다.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    project_id: str                            # room 안정키
+    team_session_id: str | None = None         # provenance (방 식별키 아님)
+    role: str                                  # PM 포함 7역할 중 하나. Monitor 는 제외(POST 금지)
+    display_name: str | None = None            # 방 표시명 갱신 후보
+    surface_id: str | None = None              # 관측 surface 진단값
+    activity: str                              # 항상 active (아니면 422)
+    reason: str = "read_screen_changed"
+    snapshot_hash: str                         # normalized snapshot hash. 원문 저장 금지
+    snapshot_bytes: int | None = None          # normalized snapshot byte length
+    poll_interval_ms: int = 1000
+    observed_at: datetime                       # poller 관측 시각 = last_active_at
+    agiteam_id_path: str | None = None         # 상대 경로 진단값
+    schema_version: int = 1

@@ -15,6 +15,7 @@ import * as api from "../api/index.js";
 import { ApiError } from "../api/client.js";
 import { adaptMessage, adaptRoom, roleOrder } from "../api/adapters.js";
 import { planArtifactChange } from "./artifactChange.js";
+import { planActivityPulse, createActivityBlinker } from "./activityBlink.js";
 import { validateImageFile, MAX_ATTACH_COUNT } from "../lib/imageAttach.js";
 import {
   MOCK_PROJECTS,
@@ -42,6 +43,12 @@ export const store = reactive({
   // 연결/모드
   degraded: false, // true = 백엔드 미연결, mock 표시
   bootError: null,
+
+  // 활동 깜빡 재평가용 reactive 시계(DS-110 §8.2 박제버그 수정 2026-06-15):
+  //   cardActivityState 는 시간기반(now-lastPulse<1.5s)인데, 컴포넌트가 비반응 Date.now() 를 넘기면
+  //   pulse 끊긴 뒤 reactive 입력 변화가 없어 재평가가 멈춰 마지막 active 가 박제된다(80초+ 깜빡 고착).
+  //   nowTick 을 1초 ticker 로 갱신 → 각 카드가 이 reactive 값을 now 로 읽어 매 초 재평가 → 1.5초면 자연 정지.
+  nowTick: Date.now(),
 
   // 프로젝트
   projects: [],
@@ -112,9 +119,50 @@ export function canCompose() {
 // 이벤트로 방·말풍선이 실시간으로 추가/갱신된다("파바바박"). WS 불가 시 polling 폴백:
 //   - 선택방 message-updates(말풍선) + rooms 주기 재조회(방 추가·연결상태).
 let ws = null;
+// 깜빡 감쇠 타이머 상태머신(요구사항 15-1, DS-110 §8.2). active pulse 마다 room 을 active 로 만들고
+// 1.5초 후 자가 idle 로 전환한다. 타이머 id 는 모듈 Map 에 보관(Vue reactive 오염 방지).
+const blinker = createActivityBlinker();
 let pollTimer = null; // 선택방 메시지 polling
 let roomsPollTimer = null; // 방 목록/연결상태 + 팀뷰 미리보기 polling
 let artifactPollTimer = null; // 산출물 변경 polling(WG-ART-04 fallback)
+let nowTickTimer = null; // 활동 깜빡 재평가용 1초 reactive 시계(박제버그 수정)
+
+// 활동 깜빡 감쇠를 시간기반으로 보장하는 reactive 시계. pulse 가 끊겨도 매 초 store.nowTick 이
+// 바뀌어 cardActivityState 가 재평가되고, lastPulse 가 1.5초를 넘으면 active 가 빠져 깜빡이 멈춘다.
+function startNowTicker() {
+  if (nowTickTimer) return;
+  nowTickTimer = setInterval(() => {
+    store.nowTick = Date.now();
+  }, 1000);
+}
+function stopNowTicker() {
+  if (nowTickTimer) {
+    clearInterval(nowTickTimer);
+    nowTickTimer = null;
+  }
+}
+
+// 방 목록/연결상태 + unread + 팀뷰 미리보기 재조회(5초). WS 가 채워주지 않는 차원이므로
+// WS 성공/실패와 무관하게 프로젝트 활성 중 항상 가동한다(분리 전엔 startPolling 에 묶여 WS 성공 시
+// 같이 죽어 unread 가 boot 스냅샷에 박제됐다). 프로젝트 전환/종료(stopRealtime)에서만 중지.
+function startRoomsRefresh(projectId) {
+  if (roomsPollTimer) return; // 중복 타이머 방지
+  roomsPollTimer = setInterval(async () => {
+    if (store.selectedProjectId !== projectId) return;
+    try {
+      mergeRooms(await api.fetchRooms(projectId)); // 권위 unread_count 반영(깜빡 상태는 보존 머지)
+    } catch {}
+    try {
+      await loadRoomPreviews(6, { silent: true }); // 전체 팀원 보기 미리보기 갱신(스피너 토글 없이)
+    } catch {}
+  }, 5000);
+}
+function stopRoomsRefresh() {
+  if (roomsPollTimer) {
+    clearInterval(roomsPollTimer);
+    roomsPollTimer = null;
+  }
+}
 let pollCursor = null;
 // 산출물 변경 cursor(WG-ART-04). WS artifact_changed 의 envelope.cursor 로 갱신되며,
 // WS 단절 시 polling 의 after 로 이어받아 누락 변경을 복구한다. WS↔polling 전환에는 보존하고
@@ -132,14 +180,13 @@ function clearReconnect() {
   }
 }
 
+// WS 가 살아있을 때 꺼야 하는 건 '중복 데이터 폴링'(선택방 메시지 pollTimer · artifactPollTimer)뿐이다.
+// 시계(nowTicker)와 unread/연결 재조회(roomsPollTimer)는 WS 가 채워주지 않는 별도 차원이라 항상 가동하며
+// 여기서 끄지 않는다(프로젝트 전환/종료의 stopRealtime 에서만 중지).
 function stopPolling() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
-  }
-  if (roomsPollTimer) {
-    clearInterval(roomsPollTimer);
-    roomsPollTimer = null;
   }
   if (artifactPollTimer) {
     clearInterval(artifactPollTimer);
@@ -159,6 +206,9 @@ function stopRealtime() {
     ws = null;
   }
   stopPolling();
+  stopNowTicker();    // LIVE 깜빡 재평가 시계 — 활성 종료 시에만 정지(폴링과 무관·항상 가동)
+  stopRoomsRefresh(); // unread/연결 재조회 — 활성 종료 시에만 정지(폴링과 무관·항상 가동)
+  blinker.cancelAll(); // 진행 중 깜빡 idle 타이머 정리(프로젝트 전환/정상종료, DS-110 §8.2)
   artifactCursor = null; // 프로젝트 전환/정상종료 — 산출물 커서 완전 초기화
   wsProjectId = null;
 }
@@ -174,6 +224,18 @@ function handleWsEvent(ev) {
   const data = env.data && typeof env.data === "object" ? env.data : env;
   const type = env.type || env.event_type || env.update_type || data.update_type || data.type;
   if (!type) return;
+  // 실제 종류 판별자: DS-110 §7 봉투는 envelope.type='message_update' 로 오고 data.update_type 에
+  // 'runtime_activity_changed' 가 실린다. type(=message_update) 만 보면 message 분기로 새므로 분리 판별.
+  const updateType = data.update_type || env.update_type || type;
+  // 런타임 활동 변경(요구사항 15-1, DS-110 §7/§8): payload 는 data.event.payload(신 스키마) 우선,
+  // 구 스키마(data.room/data)도 흡수. room_id 는 data.room_id 로 보강, occurred_at 으로 gap replay 가드.
+  if (updateType === "runtime_activity_changed") {
+    const ev = data.event && typeof data.event === "object" ? data.event : null;
+    const base = (ev && ev.payload) || data.room || data;
+    const payload = base ? { ...base, room_id: base.room_id ?? data.room_id } : null;
+    const occurredAt = (ev && ev.occurred_at) || data.occurred_at || env.cursor || null;
+    return applyRuntimeActivity(payload, occurredAt);
+  }
   // project_discovered 는 전역(새 프로젝트 발견) — 스코프 가드 예외(필터 전에 처리).
   if (type === "project_discovered") return upsertProjectEvent(data.project || data);
   // QI-WG-030(FE측 정합): project 스코프 가드(이중 방어). WS 는 project_id 단위로 열지만,
@@ -190,8 +252,6 @@ function handleWsEvent(ev) {
   }
   if (type === "room_upserted") return upsertRoomEvent(data.room || data);
   if (type === "room_connection_changed") return applyRoomConnection(data.room || data);
-  // 런타임 활동 변경(요구사항 15-1): 연결상태(liveness) 위에 얹는 2차원(active/idle).
-  if (type === "runtime_activity_changed") return applyRuntimeActivity(data.room || data);
   // message 계열: update envelope({update_type,room_id,message}) 형태로 정규화 후 머지
   if (type.indexOf("message") === 0 || data.message) {
     const update = data.update_type
@@ -226,11 +286,24 @@ function upsertRoomEvent(raw) {
     (r) => r.roomId === room.roomId || (r.projectId === room.projectId && r.role === room.role)
   );
   if (idx >= 0) {
-    store.rooms[idx] = { ...store.rooms[idx], ...room };
+    store.rooms[idx] = mergeRoomPreserveActivity(store.rooms[idx], room);
   } else {
     store.rooms.push(room);
     store.rooms.sort((a, b) => roleOrder(a.role) - roleOrder(b.role)); // 역할 순서 유지
   }
+}
+
+// 방 갱신 시 깜빡 상태 보존(DS-110 §9): WS 타이머가 활동상태의 진실. REST/upsert 가 전한
+// runtime_activity 는 hint 일 뿐이라 진행 중 깜빡(runtimeActivity/activityBlinkKey/lastActivityPulseAt)을
+// 덮어쓰지 않는다. lastActiveAt(REST degrade hint)·연결상태 등 나머지 필드는 최신값으로 갱신한다.
+function mergeRoomPreserveActivity(prev, next) {
+  return {
+    ...prev,
+    ...next,
+    runtimeActivity: prev.runtimeActivity,
+    activityBlinkKey: prev.activityBlinkKey,
+    lastActivityPulseAt: prev.lastActivityPulseAt,
+  };
 }
 
 // 연결상태 변경(삭제하지 않고 상태만 갱신, DS-60 §4.4)
@@ -242,19 +315,22 @@ function applyRoomConnection(raw) {
   if (raw.runtime_state) r.runtimeState = raw.runtime_state;
 }
 
-// 런타임 활동 변경(요구사항 15-1, 아테나 인터페이스): runtime_activity_changed WS 이벤트 1건을
-// 방에 반영한다. payload: { project_id, role, runtime_activity(active|idle|unknown),
-//   from_activity, ts, reason, offset_start/end, chunk_bytes, ... } — 카드 표시엔 runtime_activity 만 사용.
-// 매칭: role + project_id(+ room_id). 연결상태와 독립 차원이므로 runtimeActivity 만 갱신한다.
-function applyRuntimeActivity(raw) {
-  if (!raw) return;
-  // 스코프 가드(이중 방어): 타 프로젝트 이벤트 무시(handleWsEvent 에서 1차 필터되나 안전망).
-  if (raw.project_id && store.selectedProjectId && raw.project_id !== store.selectedProjectId) return;
+// 런타임 활동 변경(요구사항 15-1, DS-110 §8.2): runtime_activity_changed WS pulse 1건을 깜빡으로 반영.
+//   payload: { project_id, role, room_id?, runtime_activity, last_active_at, ... } (DS-110 §7 event.payload)
+// 규칙: active pulse 만 깜빡을 만든다(서버발 idle/unknown·타 프로젝트·오래된 gap replay 는 무시).
+//   적용 시 blinker.pulse 가 runtimeActivity='active' + activityBlinkKey+1 + 1.5초 후 자가 idle 로 전환.
+//   연결상태와 독립 차원이므로 connectionState/runtimeState 는 건드리지 않는다.
+function applyRuntimeActivity(payload, occurredAt) {
+  const plan = planActivityPulse(payload, occurredAt, {
+    selectedProjectId: store.selectedProjectId,
+    now: Date.now(),
+  });
+  if (!plan.apply) return; // not_active(서버발 idle) | other_project | no_payload
   const r = store.rooms.find(
-    (x) => x.roomId === raw.room_id || (x.projectId === raw.project_id && x.role === raw.role)
+    (x) => x.roomId === payload.room_id || (x.projectId === payload.project_id && x.role === payload.role)
   );
   if (!r) return;
-  if (raw.runtime_activity) r.runtimeActivity = raw.runtime_activity; // active | idle | unknown
+  blinker.pulse(r, occurredAt);
 }
 
 // rooms 재조회 결과를 기존 목록에 머지(연결상태/last 갱신 + 신규 방 추가) — polling 폴백용
@@ -263,12 +339,13 @@ function mergeRooms(rooms) {
     const idx = store.rooms.findIndex(
       (r) => r.roomId === room.roomId || (r.projectId === room.projectId && r.role === room.role)
     );
-    if (idx >= 0) store.rooms[idx] = { ...store.rooms[idx], ...room };
+    if (idx >= 0) store.rooms[idx] = mergeRoomPreserveActivity(store.rooms[idx], room);
     else store.rooms.push(room);
   }
   store.rooms.sort((a, b) => roleOrder(a.role) - roleOrder(b.role));
 }
 
+// WS 단절 시에만 켜는 '중복 데이터 폴백'. nowTicker·roomsPollTimer 는 여기서 다루지 않는다(항상 가동).
 function startPolling(projectId) {
   if (pollTimer) return; // 이미 폴링 중(재연결 실패 반복 시 중복 타이머 방지)
   pollCursor = null;
@@ -285,16 +362,7 @@ function startPolling(projectId) {
       /* 다음 tick 재시도 */
     }
   }, 3000);
-  // 방 목록/연결상태 + 전체 방 미리보기(팀뷰). WS 가 죽어도 팀뷰가 멈추지 않게 폴백 커버.
-  roomsPollTimer = setInterval(async () => {
-    if (store.selectedProjectId !== projectId) return;
-    try {
-      mergeRooms(await api.fetchRooms(projectId));
-    } catch {}
-    try {
-      await loadRoomPreviews(6, { silent: true }); // 전체 팀원 보기 미리보기 갱신(스피너 토글 없이)
-    } catch {}
-  }, 5000);
+  // 방 목록/연결상태 + unread 재조회(roomsPollTimer)는 startRoomsRefresh 로 분리되어 항상 가동된다.
   // 산출물 변경 polling(WG-ART-04 fallback). WS 단절 동안 열린 트리·뷰어 파일을 동일 매핑으로 갱신.
   //   artifactCursor 를 after 로 이어받아 누락분만 수신하고, 만료(409) 시 full resync 한다.
   artifactPollTimer = setInterval(async () => {
@@ -767,6 +835,10 @@ export async function selectProject(projectId) {
   }
   // 프로젝트 단위 실시간 구독 시작(방·말풍선 실시간 추가)
   startRealtime(projectId);
+  // LIVE 깜빡 재평가 시계 + unread/연결 재조회는 WS 성공/실패와 무관하게 항상 가동(공통 버그 수정).
+  //   WS 가 채워주지 않는 차원이라 폴링 폴백 생명주기에서 분리한다. stopRealtime 에서만 정지.
+  startNowTicker();
+  startRoomsRefresh(projectId);
   loadTreeRoot();
 }
 

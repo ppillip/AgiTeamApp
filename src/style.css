@@ -220,3 +220,18 @@ body {
   border-color: #fca5a5;
   color: #b91c1c;
 }
+
+/* ── 에이전트 동작중 깜빡 감쇠 인디케이터 (요구사항 15-1, DS-110 §8.1) ──────────
+   0.3초 × 5회(=1.5초) 후 자연 정지. tailwind config(JIT) extend 로 두면 dev 런타임 CSS 에
+   keyframe 이 누락될 수 있어(실측: dev 번들에 animate-activity-blink 0건), dev/prod 모두 확실하도록
+   여기(plain CSS)에 직접 정의한다. pulse 마다 TeamView/ChatView 의 :key(activityBlinkKey) 가 바뀌어
+   해당 점 element 가 재마운트되며 애니메이션이 0 부터 재시작 → 연속 출력 중 끊김 없이 깜빡인다. */
+@keyframes activity-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+.animate-activity-blink {
+  /* 동작중(active)인 동안 무한 깜빡 — idle 전환 시 cardActivityState 가 class 를 떼어 정지.
+     기존 5회 유한 + :key 재시작 방식은 일부 배지에서 재시작이 불안정해 1.5초 후 멈췄다(유저 실측 2026-06-15). */
+  animation: activity-blink 0.4s ease-in-out infinite;
+}

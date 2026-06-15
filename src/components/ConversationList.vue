@@ -2,6 +2,7 @@
 import Icon from "./Icon.vue";
 import { store, selectRoom } from "../stores/monitor.js";
 import { roleLabel, connectionInfo } from "../api/adapters.js";
+import { cardActivityState } from "../stores/activityBlink.js";
 import { cleanMessageText } from "../lib/sanitize.js";
 
 // 상태 tone → 배지/점 색 (LIVE=실연결 녹색 · 끊김=회색 · MOCK=목업 amber)
@@ -54,6 +55,10 @@ export default {
     statusClass(tone, part) {
       return (STATUS_CLASS[tone] || STATUS_CLASS.off)[part];
     },
+    // 런타임 활동(요구사항 15-1, DS-110 §8.3 확장: 방 목록 보조 점). r 은 store.rooms 의 reactive 객체.
+    activity(r) {
+      return cardActivityState(r, { degraded: store.degraded, now: store.nowTick });
+    },
   },
 };
 </script>
@@ -88,6 +93,7 @@ export default {
           :class="r.roomId === store.selectedRoomId ? 'bg-amber text-white' : (r.isPM ? 'bg-amber-tint text-amber-600' : 'bg-line-soft text-ink-600')"
         >
           {{ r.mono }}
+          <!-- 아바타 우하단 점 = connection 상태(LIVE/끊김/MOCK) 정적 표시. 깜빡(동작중)은 아래 LIVE 배지 점으로 통일(PM 2026-06-15). -->
           <span
             class="absolute -bottom-0.5 -right-0.5 h-[11px] w-[11px] rounded-full border-2 border-white"
             :class="statusClass(roomStatus(r).tone, 'dot')"
@@ -110,7 +116,11 @@ export default {
             class="mt-[9px] inline-flex items-center gap-[5px] rounded-[7px] px-[9px] py-[3px] text-[11.5px] font-bold tracking-wide"
             :class="statusClass(roomStatus(r).tone, 'badge')"
           >
-            <span class="h-1.5 w-1.5 rounded-full bg-current"></span>{{ roomStatus(r).label }}
+            <span
+              class="h-1.5 w-1.5 rounded-full bg-current"
+              :key="'live-blink-' + (r.activityBlinkKey || 0)"
+              :class="activity(r) && activity(r).active ? 'animate-activity-blink' : ''"
+            ></span>{{ roomStatus(r).label }}<template v-if="activity(r)?.active"> · 동작중</template>
           </span>
         </div>
       </button>

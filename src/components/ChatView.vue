@@ -11,6 +11,7 @@ import {
   canSend,
 } from "../stores/monitor.js";
 import { roleLabel, connectionInfo } from "../api/adapters.js";
+import { cardActivityState } from "../stores/activityBlink.js";
 import { attachmentPreviewSrc } from "../api/index.js";
 import { renderMessageBody } from "../lib/sanitize.js";
 
@@ -85,6 +86,11 @@ export default {
       if (!r) return { label: "끊김", tone: "off" };
       // 연결 표식은 connection_state 기준(데이터 출처는 말풍선 provenance 배지가 담당)
       return connectionInfo(r.connectionState, r.runtimeState, { mock: store.degraded });
+    },
+    // 런타임 활동 2차 인디케이터(요구사항 15-1, DS-110 §8.3 단일방 헤더). 전체보기(TeamView)와 동일 판정.
+    //   this.room 은 selectedRoom()=store.rooms 의 같은 reactive 객체 → applyRuntimeActivity 의 갱신이 그대로 반영.
+    activity() {
+      return cardActivityState(this.room, { degraded: store.degraded, now: store.nowTick });
     },
     // 수집기 상태 경고 (DS-60 §4.2·§10.2: collector delayed/stopped → FE 표시).
     collectorWarn() {
@@ -265,7 +271,7 @@ export default {
                     : connStatus.tone === 'mock'
                     ? 'border-amber-tintbd bg-amber-tint text-amber-600'
                     : 'border-line bg-line-soft text-ink-500'">
-              <span class="h-1.5 w-1.5 rounded-full bg-current"></span>{{ connStatus.label }}
+              <span class="h-1.5 w-1.5 rounded-full" :key="'blink-' + (room.activityBlinkKey || 0)" :class="activity ? (activity.active ? 'bg-current animate-activity-blink' : 'bg-grn/50') : 'bg-current'"></span>{{ connStatus.label }}<template v-if="activity?.active"> · 동작중</template>
             </span>
             <!-- 수집기 상태 경고 (DS-60: collector delayed/stopped) -->
             <span v-if="collectorWarn"

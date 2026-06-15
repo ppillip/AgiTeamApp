@@ -2,6 +2,7 @@
 import Icon from "./Icon.vue";
 import { store, send, loadRoomPreviews } from "../stores/monitor.js";
 import { roleLabel, connectionInfo, provenanceInfo } from "../api/adapters.js";
+import { cardActivityState } from "../stores/activityBlink.js";
 import { renderMessageBody } from "../lib/sanitize.js";
 
 // 전체 팀원 보기 (UI-04, 뮤즈 시안 기준).
@@ -135,15 +136,19 @@ export default {
     statusClass(tone) {
       return STATUS_CLASS[tone] || STATUS_CLASS.off;
     },
-    // 런타임 활동 2차 인디케이터(요구사항 15-1). 연결됨일 때만 'LIVE' 위에 얹는다.
-    //   active → '동작중'(초록 점 pulse) · idle → '조용함'(연녹 정적 점)
-    //   disconnected/mock → null(끊김·MOCK 만 표시) · unknown → null(LIVE 만)
+    // 런타임 활동 2차 인디케이터(요구사항 15-1, DS-110 §8.3).
+    //   active → '동작중'(0.3초×5회 깜빡 점) · idle → '조용함'(연녹 정적 점) · unknown → null
     // ⚠️ 문구 규칙(불가침): '작업중'·'대기' 금지 — '동작중'·'조용함'만.
+    //
+    // ⚠️ connection 게이트 제거(PM 긴급 2026-06-15): connectionState!=='connected' 차단을 두지 않는다.
+    //   폴러가 보내는 runtime_activity=active(WS pulse)는 '지금 실제로 출력이 있었다'는 직접 관측이다.
+    //   연결 디스커버리(cmux pane 발견)와 독립이라, 모니터와 다른 cmux에 떠 disconnected 로 잡혀도
+    //   active pulse 면 깜빡해야 한다. 죽은 팀은 pulse 가 안 와 1.5초 뒤 자연히 멈추므로 오작동 없음.
+    //   단 store.degraded(mock 모드)만 제외한다(가짜 깜빡 금지).
+    // 판정: WS 깜빡 타이머가 세운 runtimeActivity 가 1차. WS 없는 REST 폴백에선 last_active_at 이
+    //   현재 1.5초 이내면 '동작중' 으로 보강한다(§9 degrade hint). 순수 결정은 cardActivityState 가 담당.
     cardActivity(r) {
-      if (store.degraded || r.connectionState !== "connected") return null;
-      if (r.runtimeActivity === "active") return { label: "동작중", active: true };
-      if (r.runtimeActivity === "idle") return { label: "조용함", active: false };
-      return null; // unknown → LIVE 만
+      return cardActivityState(r, { degraded: store.degraded, now: store.nowTick });
     },
     // 데이터 출처 배지(provenance): hook/transcript=실데이터, mock/끊김 명시.
     // ⚠️ 헤더 연결축이 이미 'LIVE' 를 표시하므로, 출처배지는 'LIVE ' 접두를 떼고
@@ -224,7 +229,7 @@ export default {
             <div class="mt-1 truncate text-[12.5px] font-semibold text-ink-500">{{ subtitle(pmRoom.role) }}</div>
           </div>
           <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :class="statusClass(roomStatus(pmRoom).tone)">
-            <span class="h-1.5 w-1.5 rounded-full" :class="cardActivity(pmRoom) ? (cardActivity(pmRoom).active ? 'bg-current animate-pulse' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(pmRoom).label }}<template v-if="cardActivity(pmRoom)"> · {{ cardActivity(pmRoom).label }}</template>
+            <span class="h-1.5 w-1.5 rounded-full" :key="'blink-' + (pmRoom.activityBlinkKey || 0)" :class="cardActivity(pmRoom) ? (cardActivity(pmRoom).active ? 'bg-current animate-activity-blink' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(pmRoom).label }}<template v-if="cardActivity(pmRoom)?.active"> · 동작중</template>
           </span>
         </header>
         <div class="flex items-center justify-between gap-2 px-4 pt-2.5 text-[11.5px] font-bold text-ink-500">
@@ -271,7 +276,7 @@ export default {
               <div class="mt-1 truncate text-[11.5px] font-semibold text-ink-500">{{ subtitle(r.role) }}</div>
             </div>
             <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :class="statusClass(roomStatus(r).tone)">
-              <span class="h-1.5 w-1.5 rounded-full" :class="cardActivity(r) ? (cardActivity(r).active ? 'bg-current animate-pulse' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(r).label }}<template v-if="cardActivity(r)"> · {{ cardActivity(r).label }}</template>
+              <span class="h-1.5 w-1.5 rounded-full" :key="'blink-' + (r.activityBlinkKey || 0)" :class="cardActivity(r) ? (cardActivity(r).active ? 'bg-current animate-activity-blink' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(r).label }}<template v-if="cardActivity(r)?.active"> · 동작중</template>
             </span>
           </header>
           <div class="flex items-center justify-between gap-2 px-[13px] pt-2.5 text-[11.5px] font-bold text-ink-500">
