@@ -1,0 +1,11 @@
+[package]
+name = "agiteamapp-db"
+version = "0.1.0"
+edition = "2021"
+
+# infra adapter: WebguiRepository 포트를 sqlx(postgres)로 구현. core 포트만 의존.
+[dependencies]
+agiteamapp-core = { path = "../agiteamapp-core" }
+sqlx = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
