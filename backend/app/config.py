@@ -64,9 +64,13 @@ class Settings(BaseSettings):
     api_token: str | None = None
     collector_token: str | None = None
 
-    # CORS. 기본은 localhost dev 서버만 허용한다. IP 접근 공개 구동 시
+    # CORS. localhost dev 서버 + Tauri .app WebView 출처를 허용한다. IP 접근 공개 구동 시
     # WEBGUI_CORS_ALLOW_ORIGINS 또는 WEBGUI_CORS_ALLOW_ORIGIN_REGEX 로 명시 확장한다.
-    cors_allow_origins: str = "http://localhost:1420,http://127.0.0.1:1420"
+    # Tauri2 WebView origin: macOS/Linux=tauri://localhost, Windows=http://tauri.localhost.
+    # allow_credentials=True 와 호환되도록 wildcard 금지·명시 origin 만 사용한다(제우스 2026-06-15).
+    cors_allow_origins: str = (
+        "http://localhost:1420,http://127.0.0.1:1420,tauri://localhost,http://tauri.localhost"
+    )
     cors_allow_origin_regex: str | None = None
 
     # cmux 연동 (DS-60 §5.3). PATH 의존 금지 — 절대경로 기본값 (제우스 2026-06-07).

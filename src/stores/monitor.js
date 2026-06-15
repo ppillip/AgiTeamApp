@@ -456,7 +456,7 @@ function connectWs(projectId) {
 //   message_sent   → outbound / user_message      (질문, 우측)
 //   message_received → inbound / assistant_message (답변, 좌측)
 //   message_failed → outbound + status=failed
-function enrichUpdateMessage(raw, updateType, occurredAt, existing) {
+function enrichUpdateMessage(raw, updateType, occurredAt, existing, roomId) {
   const m = { ...raw };
   if (m.direction == null) {
     if (updateType === "message_received") m.direction = "inbound";
@@ -468,10 +468,29 @@ function enrichUpdateMessage(raw, updateType, occurredAt, existing) {
     else if (updateType === "message_sent") m.message_type = "user_message";
     else if (existing) m.message_type = existing.messageType;
   }
-  if (m.role == null && existing) m.role = existing.role;
+  // role 보강(아바타 '?' 결함): WS 희소 페이로드(transcript_collector)는 message 에 role 을
+  //   동봉하지 않는다. 기존 말풍선(낙관적/스트리밍)에서 우선 복원하고, 없으면(신규 실시간
+  //   수신) 방의 role 로 복원한다 — 수신(inbound) 메시지의 발신자 = 그 방의 에이전트이므로
+  //   room.role 이 곧 좌측 아바타의 정답. (outbound 는 좌측 아바타 미표시 → 보강 불필요)
+  if (m.role == null && m.role_id == null) {
+    if (existing && existing.role) m.role = existing.role;
+    else if (m.direction === "inbound") m.role = roomRoleById(roomId ?? m.room_id);
+  }
   if (m.status == null && updateType === "message_failed") m.status = "failed";
-  if (m.occurred_at == null && occurredAt) m.occurred_at = occurredAt;
+  // occurred_at 보강(시간 '00:00'/빈값 결함): 본문 → envelope occurred_at → 기존 →
+  //   수신시각(now) 순. WS 희소 페이로드는 본문에 occurred_at 이 없어 envelope 값으로 채우고,
+  //   그조차 없는 엣지에서도 수신시각으로 폴백해 비정상 시간 표시를 막는다.
+  if (m.occurred_at == null) {
+    m.occurred_at = occurredAt || (existing && existing.occurredAt) || new Date().toISOString();
+  }
   return m;
+}
+
+// room_id → 그 방의 role(수신 메시지 발신자 식별). store.rooms 에서 조회.
+function roomRoleById(roomId) {
+  if (!roomId) return null;
+  const r = store.rooms.find((x) => x.roomId === roomId);
+  return r ? r.role : null;
 }
 
 // 정의된(non-null) 값만 덮어써, 희소 갱신이 기존 메타(방향·역할·시각)를 지우지 않게 병합.
@@ -524,7 +543,7 @@ function applyUpdates(updates) {
       if (idx < 0 && clientId != null)
         idx = store.messages.findIndex((x) => x.pending && x.messageId === clientId);
       const existing = idx >= 0 ? store.messages[idx] : null;
-      const m = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, existing));
+      const m = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, existing, u.room_id));
       if (idx >= 0) store.messages[idx] = mergeMessage(store.messages[idx], m); // 낙관적→서버 치환(중복 방지)
       else store.messages.push(m); // 신규 말풍선 → 즉시 추가(실시간 렌더)
     }
@@ -538,7 +557,7 @@ function applyUpdates(updates) {
       let pi = rawId != null ? pv.findIndex((x) => x.messageId === rawId) : -1;
       if (pi < 0 && clientId != null)
         pi = pv.findIndex((x) => x.pending && x.messageId === clientId);
-      const pm = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, pi >= 0 ? pv[pi] : null));
+      const pm = adaptMessage(enrichUpdateMessage(u.message, u.update_type, u.occurred_at, pi >= 0 ? pv[pi] : null, u.room_id));
       if (pi >= 0) pv[pi] = mergeMessage(pv[pi], pm);
       else {
         pv.push(pm);
