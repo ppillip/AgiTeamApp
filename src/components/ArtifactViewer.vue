@@ -283,6 +283,55 @@ export default {
         this.saving = false;
       }
     },
+    // [새창] 현재 선택 파일을 독립 팝업 창으로 표시(window.open).
+    //   - 파일경로 기반 unique window name → 파일마다 별도 창, 여러 파일 동시 팝업 가능.
+    //     (같은 파일 재클릭 시 기존 창 재사용·포커스 → 중복 창 방지)
+    //   - content(코드/마크다운/텍스트)는 라인넘버 + 모노스페이스로 직접 렌더(추가 요청 없음, 가독성 유지).
+    //   - content 없는(pdf/image/바이너리) 파일은 백엔드 원본 stream URL 을 새 창으로.
+    //   - 기존 '크게'(인라인 확대)·'채팅으로'·저장 동작과 독립.
+    openInWindow() {
+      if (!this.file) return;
+      const path = this.file.path || this.file.name || "file";
+      const winName = "agiteam-file-" + path.replace(/[^a-zA-Z0-9]+/g, "_");
+      const content = this.file.content;
+      // content 없는 형식(pdf/image/바이너리) → 백엔드 원본을 새 창으로
+      if (content == null) {
+        if (this.streamUrl) window.open(this.streamUrl, winName);
+        return;
+      }
+      const win = window.open("", winName);
+      if (!win) return; // 팝업 차단됨
+      const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const lines = String(content).split("\n");
+      const rows = lines
+        .map((ln, i) => `<div class="row"><span class="ln">${i + 1}</span><span class="src">${esc(ln) || " "}</span></div>`)
+        .join("");
+      const title = esc(this.file.name || path);
+      const pathLabel = esc(path);
+      const doc = `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: #1a1a1e; font-family: "Pretendard", system-ui, -apple-system, sans-serif; }
+  .hdr { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid #ececef; background: #fafafb; font-size: 12.5px; font-weight: 600; color: #4a4a52; }
+  .hdr .badge { flex: none; border-radius: 6px; background: #fbeede; color: #c2570b; padding: 2px 7px; font-size: 10px; font-weight: 800; }
+  .hdr .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .code-wrap { padding: 10px 0 40px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.55; }
+  .row { display: flex; padding: 0 14px; }
+  .row:hover { background: #faf7f2; }
+  .ln { flex: none; width: 48px; padding-right: 14px; text-align: right; color: #b8b8c0; user-select: none; }
+  .src { white-space: pre; tab-size: 2; }
+</style></head>
+<body>
+  <div class="hdr"><span class="badge">${esc((this.file.ext || "").toUpperCase()) || "DOC"}</span><span class="path">${pathLabel}</span></div>
+  <div class="code-wrap">${rows}</div>
+</body></html>`;
+      win.document.open();
+      win.document.write(doc);
+      win.document.close();
+      win.focus();
+    },
     // md 본문 내 .mermaid-block 들을 SVG 다이어그램으로 변환. 실패한 블록은 코드블록으로 폴백.
     async renderMermaid() {
       await this.$nextTick();
@@ -370,6 +419,9 @@ export default {
         <template v-else>
           <button v-if="file" @click="$emit('expand')" class="flex items-center gap-1.5 rounded-lg bg-[#F4F4F6] px-[13px] py-1.5 text-[12.5px] font-semibold text-ink-600 hover:bg-line-soft" title="채팅 영역에 크게 보기">
             <Icon name="expand" :size="14" />크게
+          </button>
+          <button v-if="file" @click="openInWindow" class="flex items-center gap-1.5 rounded-lg bg-[#F4F4F6] px-[13px] py-1.5 text-[12.5px] font-semibold text-ink-600 hover:bg-line-soft" title="새 창으로 열기 (여러 파일 동시 팝업 가능)">
+            <Icon name="arrowUpRight" :size="14" />새창
           </button>
           <button v-if="v.open" @click="closeViewer" class="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6]"><Icon name="x" :size="16" /></button>
         </template>
