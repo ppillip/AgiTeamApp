@@ -1,0 +1,17 @@
+[package]
+name = "agiteamapp-http"
+version = "0.1.0"
+edition = "2021"
+
+# axum adapter 만(라우팅·핸들러 → core 호출). DB 는 agiteamapp-db 를 주입.
+[dependencies]
+agiteamapp-core = { path = "../agiteamapp-core" }
+agiteamapp-db = { path = "../agiteamapp-db" }
+agiteamapp-mux = { path = "../agiteamapp-mux" }
+axum = { workspace = true, features = ["ws", "multipart"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+notify = "6"

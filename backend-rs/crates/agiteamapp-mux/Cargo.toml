@@ -1,0 +1,9 @@
+[package]
+name = "agiteamapp-mux"
+version = "0.1.0"
+edition = "2021"
+
+# infra adapter: MuxPort 를 cmux/team CLI subprocess 로 구현. core 포트만 의존.
+[dependencies]
+agiteamapp-core = { path = "../agiteamapp-core" }
+tokio = { workspace = true }
