@@ -8,3 +8,4 @@ node_modules
 *.local
 vite.config.js.timestamp-*
 src-tauri/target/
+backend-rs/target/

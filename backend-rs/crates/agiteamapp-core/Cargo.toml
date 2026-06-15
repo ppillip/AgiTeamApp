@@ -1,0 +1,14 @@
+[package]
+name = "agiteamapp-core"
+version = "0.1.0"
+edition = "2021"
+
+# 도메인/usecase + WebguiRepository trait (전송·DB 무관). 정책은 전부 여기.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

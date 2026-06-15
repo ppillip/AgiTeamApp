@@ -1,0 +1,22 @@
+# AgiTeamApp 백엔드 Rust 전환 (B단계). 아테나 골격 채택.
+# 기존 Python backend/ 은 레퍼런스로 보존 — 동등성 목표.
+[workspace]
+resolver = "2"
+members = [
+    "crates/agiteamapp-core",
+    "crates/agiteamapp-db",
+    "crates/agiteamapp-mux",
+    "crates/agiteamapp-http",
+]
+
+# transport·DB 무관 공용 의존 버전 핀. 각 crate 는 workspace = true 로 상속한다.
+[workspace.dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+regex = "1"
+# DB = B단계 PostgreSQL. agiteamapp-db(infra adapter)에서만 활성. http 는 직접 의존 안 함.
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "json"] }
