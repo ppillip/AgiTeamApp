@@ -10,6 +10,12 @@ use crate::repo::{compute_raw_hash, NewMessage, RepoError, TranscriptHint, Webgu
 
 pub const TRANSCRIPT_SOURCE: &str = "transcript";
 
+/// canonical 매칭 텍스트: 공백 정규화(trim + 연속공백 1개). cmux 래핑/공백차 흡수.
+/// (Python transcript_collector.canonical_match_text 정합)
+fn canonical_text(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscriptRecord {
     pub provider: String,
@@ -172,7 +178,17 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         } else if repo.find_message_by_hash(room_id, TRANSCRIPT_SOURCE, &raw_hash).await?.is_some() {
             continue;
         }
-        // 주: user record vs PM Bridge 선저장 중복(bridge-dup) skip 은 후속 TODO.
+        // bridge-dup: user(outbound) record 가 WebGUI 선저장 outbound(webgui/pm_bridge)와
+        // 같은 canonical text 면 중복 → skip (Python _find_outbound_text_dup 정합).
+        // WebGUI 송신(SENT) + 그 입력의 transcript 수집(LIVE) 2건 저장 방지.
+        if !is_assistant {
+            let canon = canonical_text(text);
+            if !canon.is_empty()
+                && repo.find_outbound_text_dup(room_id, &canon).await?.is_some()
+            {
+                continue;
+            }
+        }
 
         let mut correlation_id: Option<String> = None;
         let mut status = if is_assistant { "received" } else { "sent" }.to_string();
@@ -231,6 +247,12 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
             },
         });
         publisher.publish(room_id, ws, project_id);
+        // 운영 진단: hook 즉시 경로의 WS publish 발생 여부 확인용(느림 진단).
+        // 이 로그가 보이면 hook→store→publish 정상; 안 보이면 hook 미수신/transcript_path read 실패.
+        eprintln!(
+            "[transcript:publish] room={room_id} project={project_id} type={} stored",
+            if is_assistant { "message_received" } else { "message_sent" }
+        );
         stored += 1;
     }
     Ok(stored)

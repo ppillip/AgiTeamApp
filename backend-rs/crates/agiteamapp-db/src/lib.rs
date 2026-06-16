@@ -393,6 +393,29 @@ impl WebguiRepository for PgRepository {
         Ok(row.and_then(|r| r.try_get::<Option<String>, _>("collector_state").ok().flatten()))
     }
 
+    async fn find_outbound_text_dup(
+        &self,
+        room_id: &str,
+        canonical_text: &str,
+    ) -> Result<Option<MessageRow>, RepoError> {
+        // canonical(공백 정규화) 비교: btrim(regexp_replace(normalized_text,'\s+',' ')).
+        // bridge outbound(webgui/pm_bridge) 중 최근 1건. (Python _find_outbound_text_dup 정합)
+        let sql = format!(
+            "SELECT {MSG_COLS} FROM webgui_message \
+             WHERE room_id = $1::uuid AND direction = 'outbound' \
+               AND source IN ('webgui','pm_bridge') \
+               AND btrim(regexp_replace(normalized_text, '\\s+', ' ', 'g')) = $2 \
+             ORDER BY recorded_at DESC LIMIT 1"
+        );
+        let row = sqlx::query(&sql)
+            .bind(room_id)
+            .bind(canonical_text)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepoError(format!("find_outbound_text_dup: {e}")))?;
+        row.as_ref().map(map_message).transpose()
+    }
+
     async fn list_rooms(&self, project_id: &str) -> Result<Vec<RoomFull>, RepoError> {
         let sql = format!(
             "SELECT {ROOM_COLS} FROM webgui_room WHERE project_id = $1 \

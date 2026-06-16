@@ -812,6 +812,10 @@ async fn handle_ws(mut socket: WebSocket, s: AppState, q: WsQuery) {
         }
     }
 
+    // keepalive: Python message-stream 처럼 주기적 heartbeat 로 연결 유지(idle 끊김 방지).
+    // 끊김→재연결 시 live 를 놓치고 replay 로 몰려 받는(묶여 옴) 증상 해소(QI-WG-026 동등).
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
+    heartbeat.tick().await; // 첫 즉시 tick 소비(연결 직후 불필요한 hb 방지)
     loop {
         tokio::select! {
             ev = rx.recv() => match ev {
@@ -829,7 +833,21 @@ async fn handle_ws(mut socket: WebSocket, s: AppState, q: WsQuery) {
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Err(_)) => break,
-                Some(Ok(_)) => {} // ping/text 무시
+                Some(Ok(Message::Ping(p))) => {
+                    // 클라이언트 ping → pong 응답(연결 유지)
+                    if socket.send(Message::Pong(p)).await.is_err() { break; }
+                }
+                Some(Ok(_)) => {} // text/pong 무시
+            },
+            _ = heartbeat.tick() => {
+                // 서버 heartbeat (Python {"type":"heartbeat"} 정합)
+                if socket
+                    .send(Message::Text("{\"type\":\"heartbeat\"}".to_string()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             },
         }
     }
@@ -983,11 +1001,12 @@ async fn main() {
     // mux 선택: AGITEAMAPP_MUX=cmux → 실 cmux(team CLI + discovery PM 해소), 그 외(기본) → dummy.
     let mux = match std::env::var("AGITEAMAPP_MUX").as_deref() {
         Ok("cmux") => {
-            let team_bin = std::env::var("AGITEAMAPP_TEAM_BIN").unwrap_or_else(|_| "team".to_string());
+            let cmux_bin = std::env::var("AGITEAMAPP_CMUX_BIN")
+                .unwrap_or_else(|_| "/Applications/cmux.app/Contents/Resources/bin/cmux".to_string());
             let projects_base = std::env::var("AGITEAMAPP_PROJECTS_BASE")
                 .unwrap_or_else(|_| "/Users/ppillip/Projects".to_string());
             MuxAdapter::Cmux(CmuxAdapter {
-                team_bin,
+                cmux_bin,
                 projects_base,
                 discovery: Some(discovery.clone()),
             })
@@ -1010,7 +1029,13 @@ async fn main() {
                         disc.refresh_from_tree(&text, now);
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                // 실시간성: discovery 폴링 1s (기존 5s → PM 응답 표시 지연 해소).
+                // 환경변수 AGITEAMAPP_DISCOVERY_POLL_MS 로 조정 가능(기본 1000ms).
+                let poll_ms = std::env::var("AGITEAMAPP_DISCOVERY_POLL_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(1000);
+                tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
             }
         });
     }

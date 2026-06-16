@@ -171,6 +171,13 @@ mod tests {
         async fn active_collector_state(&self, _room_id: &str) -> Result<Option<String>, RepoError> {
             Ok(None)
         }
+        async fn find_outbound_text_dup(
+            &self,
+            _room_id: &str,
+            _canonical_text: &str,
+        ) -> Result<Option<MessageRow>, RepoError> {
+            Ok(None)
+        }
         async fn list_rooms(&self, _project_id: &str) -> Result<Vec<RoomFull>, RepoError> {
             Ok(vec![])
         }

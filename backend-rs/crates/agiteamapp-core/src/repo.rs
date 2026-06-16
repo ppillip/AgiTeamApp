@@ -245,6 +245,15 @@ pub trait WebguiRepository: Send + Sync {
     /// (Python rooms.py active_session_for_room().collector_state 정합)
     async fn active_collector_state(&self, room_id: &str) -> Result<Option<String>, RepoError>;
 
+    /// canonical(공백 정규화) text 가 일치하는 최근 bridge outbound(webgui/pm_bridge)를 반환.
+    /// transcript 의 user(outbound) record 와 WebGUI 선저장본의 중복 저장 방지.
+    /// (Python transcript_collector._find_outbound_text_dup 정합)
+    async fn find_outbound_text_dup(
+        &self,
+        room_id: &str,
+        canonical_text: &str,
+    ) -> Result<Option<MessageRow>, RepoError>;
+
     /// 프로젝트의 방 목록 (last_message_at desc nullslast, created_at asc).
     async fn list_rooms(&self, project_id: &str) -> Result<Vec<RoomFull>, RepoError>;
 

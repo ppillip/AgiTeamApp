@@ -180,11 +180,16 @@ export default {
     },
     // 단일 방(ChatView)과 동일한 마크다운 렌더러 — 표·코드·헤딩 GFM 렌더(XSS escape 포함)
     renderMessageBody,
-    fmtTime(iso) {
+    // 메시지 시각 포맷. sec=true 면 초까지(HH:MM:SS) — 말풍선 시각(전송 타이밍 체감용, 유저요청 2026-06-16).
+    // 방 목록 last-time 은 기본(HH:MM) 유지 → 컴팩트.
+    fmtTime(iso, sec = false) {
       if (!iso) return "";
       const d = new Date(iso);
       if (isNaN(d)) return "";
-      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      if (!sec) return `${hh}:${mm}`;
+      return `${hh}:${mm}:${String(d.getSeconds()).padStart(2, "0")}`;
     },
     lastAtOf(r) {
       const list = store.roomPreviews[r.roomId];
@@ -241,7 +246,7 @@ export default {
         <div :ref="(el) => setThreadEl('pm', el)" @scroll="onThreadScroll('pm', $event)" class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 nice-scroll">
           <div v-if="!pmMessages.length" class="flex flex-1 items-center justify-center text-[12.5px] text-ink-400">아직 메시지가 없습니다.</div>
           <div v-for="m in pmMessages.slice(-12)" :key="m.messageId" class="flex min-w-0 max-w-[92%] flex-col gap-1" :class="m.out ? 'self-end items-end' : ''">
-            <div class="flex items-center gap-1.5 text-[11.5px] font-bold text-ink-600">{{ speakerName(m, pmRoom) }}<span class="text-[10.5px] font-medium text-ink-400">{{ fmtTime(m.occurredAt) }}</span></div>
+            <div class="flex items-center gap-1.5 text-[11.5px] font-bold text-ink-600">{{ speakerName(m, pmRoom) }}<span class="text-[10.5px] font-medium text-ink-400">{{ fmtTime(m.occurredAt, true) }}</span></div>
             <!-- 단일방과 동일 md 렌더(md-body md-chat). 버블=전체 펼침, 긴 토큰 anywhere 줄바꿈(가로 짤림X). 스크롤은 thread만. -->
             <div class="md-body md-chat max-w-full rounded-2xl border px-3 py-2.5 [overflow-wrap:anywhere] [word-break:keep-all]"
                  :class="m.out ? 'md-chat-out rounded-tr-[5px] border-amber-tintbd bg-amber-tint' : 'rounded-tl-[5px] border-line bg-white'"
@@ -288,7 +293,7 @@ export default {
           <div :ref="(el) => setThreadEl(r.roomId, el)" @scroll="onThreadScroll(r.roomId, $event)" class="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-[13px] pb-3.5 pt-3 nice-scroll">
             <div v-if="!previewOf(r.roomId).length" class="flex flex-1 items-center justify-center text-[12px] text-ink-400">표시할 대화가 없습니다.</div>
             <div v-for="m in previewOf(r.roomId)" :key="m.messageId" class="flex min-w-0 max-w-[86%] flex-col gap-1" :class="m.out ? 'self-end items-end' : ''">
-              <div class="flex items-center gap-1.5 text-[11px] font-bold text-ink-600">{{ speakerName(m, r) }}<span class="text-[10px] font-medium text-ink-400">{{ fmtTime(m.occurredAt) }}</span></div>
+              <div class="flex items-center gap-1.5 text-[11px] font-bold text-ink-600">{{ speakerName(m, r) }}<span class="text-[10px] font-medium text-ink-400">{{ fmtTime(m.occurredAt, true) }}</span></div>
               <!-- 단일방과 동일 md 렌더(md-body md-chat): 표·코드·헤딩 GFM. 패널 폭 안 줄바꿈(가로 짤림X), 세로 전체 펼침, 스크롤은 thread만. -->
               <div class="md-body md-chat max-w-full rounded-[14px] border px-2.5 py-2 [overflow-wrap:anywhere] [word-break:keep-all]"
                    :class="m.out ? 'md-chat-out rounded-tr-[5px] border-amber-tintbd bg-amber-tint' : 'rounded-tl-[5px] border-line bg-white'"

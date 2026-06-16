@@ -13,6 +13,8 @@ pub const PM_ROLE_ID: &str = "PM";
 /// PM surface 해소 결과.
 #[derive(Debug, Clone)]
 pub struct PmTarget {
+    /// AGITEAM_HOME(team CLI 프로젝트 컨텍스트) 해소용. ping/submit 이 사용.
+    pub project_id: String,
     pub surface_id: String,
     pub workspace_id: Option<String>,
     pub display_name: String,

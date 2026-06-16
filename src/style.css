@@ -222,7 +222,7 @@ body {
 }
 
 /* ── 에이전트 동작중 깜빡 감쇠 인디케이터 (요구사항 15-1, DS-110 §8.1) ──────────
-   0.4초 × 약 5회(≈2초, ACTIVITY_BLINK_MS) 후 자연 정지. tailwind config(JIT) extend 로 두면 dev 런타임 CSS 에
+   0.4초 × 약 7~8회(≈3초, ACTIVITY_BLINK_MS) 후 자연 정지. tailwind config(JIT) extend 로 두면 dev 런타임 CSS 에
    keyframe 이 누락될 수 있어(실측: dev 번들에 animate-activity-blink 0건), dev/prod 모두 확실하도록
    여기(plain CSS)에 직접 정의한다. pulse 마다 TeamView/ChatView 의 :key(activityBlinkKey) 가 바뀌어
    해당 점 element 가 재마운트되며 애니메이션이 0 부터 재시작 → 연속 출력 중 끊김 없이 깜빡인다. */

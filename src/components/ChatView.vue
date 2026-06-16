@@ -206,11 +206,15 @@ export default {
       }
       // Shift+Enter 는 기본 동작(줄바꿈) 유지
     },
-    fmtTime(iso) {
+    // 메시지 시각 포맷. sec=true 면 초까지(HH:MM:SS) — 말풍선 시각(전송 타이밍 체감용, 유저요청 2026-06-16).
+    fmtTime(iso, sec = false) {
       if (!iso) return "";
       const d = new Date(iso);
       if (isNaN(d)) return "";
-      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      if (!sec) return `${hh}:${mm}`;
+      return `${hh}:${mm}:${String(d.getSeconds()).padStart(2, "0")}`;
     },
     scrollDown() {
       this.$nextTick(() => {
@@ -360,7 +364,7 @@ export default {
               </div>
 
               <div class="mt-[7px] flex items-center gap-1.5 text-[11.5px] text-ink-300">
-                <span>{{ fmtTime(it.m.occurredAt) }}</span>
+                <span>{{ fmtTime(it.m.occurredAt, true) }}</span>
                 <span v-if="it.m.pending" class="text-ink-400">전송 중…</span>
                 <span v-else-if="it.m.failed" class="font-semibold text-red-500">전송 실패</span>
                 <Icon v-else-if="it.m.out" name="check" :size="13" :stroke="2.4" class="text-amber" />
