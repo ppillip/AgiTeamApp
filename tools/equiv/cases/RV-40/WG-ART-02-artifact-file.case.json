@@ -1,0 +1,19 @@
+{
+  "case_id": "WG-ART-02-happy-code",
+  "contract_id": "WG-ART-02",
+  "title": "artifact file metadata/content/render_mode 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/artifacts/file",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {
+      "project_id": "Panthea",
+      "root_type": "documents",
+      "path": "products/AgiTeamApp/04.development/02.설계/DS-120_모니터백엔드Rust전환설계서/DS-120_모니터백엔드Rust전환설계서_latest.md"
+    },
+    "body": null
+  },
+  "seed": { "fs_tree": "fixtures/fs/artifacts" },
+  "array_sort_paths": []
+}

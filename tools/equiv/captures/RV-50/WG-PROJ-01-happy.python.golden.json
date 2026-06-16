@@ -1,0 +1,33 @@
+{
+  "case_id": "WG-PROJ-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-length": "308",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "selected_project_id": null,
+        "projects": [
+          {
+            "project_id": "Panthea",
+            "workspace_id": null,
+            "workspace_title": "Panthea",
+            "root_path": "/projects/Panthea",
+            "connection_state": "disconnected",
+            "pm_connection_state": "absent",
+            "room_count": 2,
+            "selected": false,
+            "last_discovered_at": null,
+            "roles": [
+              "PM",
+              "QA"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

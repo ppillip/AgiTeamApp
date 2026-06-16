@@ -1,0 +1,31 @@
+{
+  "case_id": "WG-CHAT-06-happy-collect",
+  "contract_id": "WG-CHAT-06",
+  "title": "room 지정 runtime event collect",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/internal/rooms/00000000-0000-4000-8000-000000000101/events/collect",
+    "headers": { "authorization": "Bearer <fixture-collector-token>" },
+    "query": {},
+    "body": {
+      "agent_session_id": "00000000-0000-4000-8000-000000000201",
+      "message_id": "00000000-0000-4000-8000-000000000302",
+      "correlation_id": "00000000-0000-4000-8000-000000000501",
+      "event_type": "hook_stop",
+      "source": "hook",
+      "severity": "info",
+      "hook_provider": "claude_code",
+      "hook_event_name": "Stop",
+      "payload": {
+        "session_id": "rv60-session",
+        "transcript_path": "fixtures/transcripts/rv40-stop.jsonl",
+        "agent_id": "rv60-qa-agent",
+        "token": "<SECRET>"
+      },
+      "occurred_at": "2026-06-16T09:03:00+00:00"
+    }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["db.webgui_runtime_event[]", "ws_events[]"]
+}

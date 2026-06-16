@@ -1,0 +1,178 @@
+{
+  "case_id": "WG-ART-04-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "4472"
+    },
+    "body": {
+      "data": {
+        "next_cursor": "21",
+        "updates": [
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/04.development/04.테스트/RV-50_골든자기검증리포트/RV-70_수정내역_v0.1.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/04.development/04.테스트/RV-50_골든자기검증리포트/RV-70_수정내역_v0.1.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/04.development/04.테스트/RV-50_골든자기검증리포트/RV-70_수정내역_v0.1.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/04.development/04.테스트/TS-20_통합테스트결과서/RV-60_동적E2E전수재검증결과서_v0.1.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/04.development/04.테스트/TS-20_통합테스트결과서/RV-60_동적E2E전수재검증결과서_v0.1.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/04.development/04.테스트/TS-20_통합테스트결과서/RV-60_동적E2E전수재검증결과서_v0.1.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/02.상시관리/MG-40_품질관리대장/MG-40_RV-60_잔여FAIL_결함분류_20260616.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/02.상시관리/MG-40_품질관리대장/MG-40_RV-60_잔여FAIL_결함분류_20260616.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/02.상시관리/MG-40_품질관리대장/MG-40_RV-60_잔여FAIL_결함분류_20260616.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/_archive/IN-20_WBS.latest.md_20260616152053",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/_archive/IN-20_WBS.latest.md_20260616152053",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/_archive/IN-20_WBS.latest.md_20260616152053",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "created",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          },
+          {
+            "change_type": "modified",
+            "coalesced": false,
+            "node_type": "file",
+            "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+            "project_id": "Panthea",
+            "root_type": "documents"
+          }
+        ]
+      },
+      "ok": true
+    }
+  }
+}

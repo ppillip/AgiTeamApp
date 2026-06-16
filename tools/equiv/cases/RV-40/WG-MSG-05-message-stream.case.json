@@ -1,0 +1,23 @@
+{
+  "case_id": "WG-MSG-05-replay-live",
+  "contract_id": "WG-MSG-05",
+  "title": "message-stream gap replay 후 live event 수신",
+  "request": {
+    "kind": "ws",
+    "path": "/api/webgui/message-stream",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {
+      "project_id": "Panthea",
+      "room_id": "00000000-0000-4000-8000-000000000101",
+      "after": "2026-06-16T09:00:00+00:00|message:00000000-0000-4000-8000-000000000301"
+    },
+    "ws_ops": [
+      { "op": "connect" },
+      { "op": "expect_replay", "count_min": 1 },
+      { "op": "trigger_http_case", "case_id": "WG-CHAT-05-happy-collect" },
+      { "op": "expect_event", "type": "message_update" }
+    ]
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql" },
+  "array_sort_paths": ["ws_events[]"]
+}

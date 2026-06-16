@@ -33,22 +33,24 @@ fn last_message_dict(m: &MessageRow) -> Value {
     })
 }
 
-/// room_summary_dict (Python 정합). connection_state 미포팅(cmux discovery) → "disconnected".
+/// room_summary_dict (Python 정합).
+/// connection_state(노출)와 runtime_state(계산값)는 호출처가 결정한다 — Python 에서
+/// rooms 목록은 connection_state 를 discovery 로 주입하고 runtime_state 는 _room_runtime_state(r, None)
+/// =항상 disconnected 로 직교 계산하며, room messages 는 runtime_state 를 conn 기반으로 둔다.
+/// connection_state 는 Python 에서 rooms 목록만 _with_connection 으로 주입하고 room messages
+/// 응답엔 노출하지 않는다 → Option(Some=노출, None=미노출).
+#[allow(clippy::too_many_arguments)]
 pub fn room_summary_dict(
     r: &RoomFull,
     last: Option<&MessageRow>,
     collector_state: &str,
-    connection_state: &str,
+    connection_state: Option<&str>,
+    runtime_state: &str,
     runtime_activity: &str,
     last_active_at: Option<&str>,
 ) -> Value {
-    let runtime_state = if connection_state == "connected" || connection_state == "live" {
-        "live"
-    } else {
-        "disconnected"
-    };
     let last_source = last.map(|m| m.source.as_str());
-    json!({
+    let mut d = json!({
         "room_id": r.room_id,
         "project_id": r.project_id,
         "role": r.role_id,
@@ -69,7 +71,12 @@ pub fn room_summary_dict(
         "last_message_at": r.last_message_at,
         "read_marker_at": r.read_marker_at,
         "unread_count": r.unread_count,
-    })
+    });
+    // rooms 목록만 connection_state 노출 (Python _with_connection 정합).
+    if let Some(conn) = connection_state {
+        d["connection_state"] = json!(conn);
+    }
+    d
 }
 
 /// runtime_activity/last_active_at REST degrade (DS-110 §9.1). pulse 있으면 active.
@@ -107,11 +114,14 @@ pub async fn list_rooms<R: WebguiRepository>(
         };
         let (act, last_active) = activity_fields(reg, project_id, &r.role_id);
         let conn = disc.connection_state(project_id, &r.role_id);
+        let collector = repo.active_collector_state(&r.room_id).await?.unwrap_or_else(|| "unknown".to_string());
+        // Python rooms 목록: runtime_state=_room_runtime_state(r, None)=항상 disconnected (connection 과 직교).
         out.push(room_summary_dict(
             r,
             last.as_ref(),
-            "unknown",
-            &conn,
+            &collector,
+            Some(&conn),
+            "disconnected",
             &act,
             last_active.as_deref(),
         ));
@@ -124,6 +134,7 @@ pub async fn list_rooms<R: WebguiRepository>(
 pub async fn list_room_messages<R: WebguiRepository>(
     repo: &R,
     reg: &ActivityRegistry,
+    disc: &DiscoveryRegistry,
     room_id: &str,
     limit: i64,
     direction: &str,
@@ -164,11 +175,15 @@ pub async fn list_room_messages<R: WebguiRepository>(
     };
     let messages: Vec<Value> = rows
         .iter()
-        .map(|m| message_to_dict(m, &room.project_id))
+        .map(|m| message_to_dict(m, &room.project_id, None))
         .collect();
 
+    let conn = disc.connection_state(&room.project_id, &room.role_id);
+    let collector = repo.active_collector_state(&room.room_id).await?.unwrap_or_else(|| "unknown".to_string());
+    // Python room messages: runtime_state = "live" if conn=="connected" else "disconnected" (L134).
+    let runtime_state = if conn == "connected" || conn == "live" { "live" } else { "disconnected" };
     Ok(json!({
-        "room": room_summary_dict(&room, last.as_ref(), "unknown", "disconnected", &act, last_active.as_deref()),
+        "room": room_summary_dict(&room, last.as_ref(), &collector, None, runtime_state, &act, last_active.as_deref()),
         "messages": messages,
         "page": { "limit": limit, "next_cursor": next_cursor, "has_more": has_more },
     }))
@@ -184,7 +199,7 @@ fn parse_cursor(cursor: &str) -> Result<(String, String), ApiError> {
     }
 }
 
-fn message_update_type(direction: &str, status: &str) -> &'static str {
+pub fn message_update_type(direction: &str, status: &str) -> &'static str {
     if direction == "inbound" {
         "message_received"
     } else if status == "sent" {
@@ -225,7 +240,7 @@ pub async fn get_message<R: WebguiRepository>(
         .await?
         .map(|r| r.project_id)
         .unwrap_or_default();
-    Ok(json!({ "message": message_to_dict(&msg, &pid), "related_updates": related }))
+    Ok(json!({ "message": message_to_dict(&msg, &pid, None), "related_updates": related }))
 }
 
 /// GET /api/webgui/message-updates → {updates, next_cursor}. project_id 격리 강제.
@@ -257,7 +272,7 @@ pub async fn message_updates<R: WebguiRepository>(
                 "room_id": m.room_id,
                 "correlation_id": m.correlation_id,
                 "update_type": message_update_type(&m.direction, &m.status),
-                "message": message_to_dict(m, &room.project_id),
+                "message": message_to_dict(m, &room.project_id, Some("polling")),
                 "event": Value::Null,
                 "occurred_at": m.occurred_at,
             })
@@ -364,18 +379,25 @@ pub async fn list_projects<R: WebguiRepository>(
     repo: &R,
     disc: &DiscoveryRegistry,
     selected_project_id: Option<&str>,
+    projects_base: &str,
 ) -> Result<Value, ApiError> {
     // 디스커버리(cmux tree) 우선 — connection_state 실값 보유.
     let disc_projects = disc.projects();
+    // RV-55/아테나 정본: discovery-backed 프로젝트는 last_discovered_at 이 ISO-8601 string(null 불허),
+    // root_path 는 <projects_base>/<pid> (Python settings.project_root). DB-only 는 null 유지.
+    let now_iso = repo.server_now().await?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut projects: Vec<Value> = Vec::new();
     for p in &disc_projects {
-        if let Some(pid) = p["project_id"].as_str() {
-            seen.insert(pid.to_string());
+        let pid = p["project_id"].as_str().unwrap_or("").to_string();
+        if !pid.is_empty() {
+            seen.insert(pid.clone());
         }
         let mut v = p.clone();
-        v["root_path"] = Value::Null;
-        v["last_discovered_at"] = Value::Null;
+        v["root_path"] = json!(format!("{}/{}", projects_base.trim_end_matches('/'), pid));
+        v["last_discovered_at"] = json!(now_iso);
+        // 9차 정정: roles 는 discovery 객체배열 그대로 노출(Python oracle·FE adapters.js 정합).
+        // 이전 string[] 정규화(5~8차)는 FE 역할패널/연결배지/아바타를 깨뜨리는 오류였다.
         projects.push(v);
     }
     // DB 방보유 프로젝트 union (디스커버리에 없는 것만, QI-WG-021).

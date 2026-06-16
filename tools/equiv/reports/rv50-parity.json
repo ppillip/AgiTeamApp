@@ -1,0 +1,919 @@
+{
+  "doc": "RV-50(BE분) parity 1회전 결과",
+  "py_base": "http://127.0.0.1:18080",
+  "rs_base": "http://127.0.0.1:18081",
+  "total": 23,
+  "pass": 9,
+  "fail": 13,
+  "skip": 1,
+  "results": [
+    {
+      "contract_id": "META-01",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "META-01-happy",
+      "result": "PASS",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "META-02",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "META-02-happy",
+      "result": "PASS",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-ACT-01",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-ACT-01-active-pulse",
+      "result": "PASS",
+      "py_status": 201,
+      "rs_status": 201
+    },
+    {
+      "contract_id": "WG-ART-01",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-ART-01-happy",
+      "result": "PASS",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-ART-02",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-ART-02-happy-code",
+      "result": "PASS",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-ART-03",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-ART-03-range",
+      "result": "PASS",
+      "py_status": 206,
+      "rs_status": 206
+    },
+    {
+      "contract_id": "WG-ART-04",
+      "passed": false,
+      "diff_count": 4,
+      "strict_diff_count": 4,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data",
+          "policy": "strict",
+          "kind": "missing_in_python",
+          "python": "<MISSING>",
+          "rust": {
+            "next_cursor": "21",
+            "updates": [
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/04.development/04.테스트/RV-50_골든자기검증리포트/RV-70_수정내역_v0.1.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/04.development/04.테스트/RV-50_골든자기검증리포트/RV-70_수정내역_v0.1.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/04.development/04.테스트/RV-50_골든자기검증리포트/RV-70_수정내역_v0.1.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/04.development/04.테스트/TS-20_통합테스트결과서/RV-60_동적E2E전수재검증결과서_v0.1.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/04.development/04.테스트/TS-20_통합테스트결과서/RV-60_동적E2E전수재검증결과서_v0.1.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/04.development/04.테스트/TS-20_통합테스트결과서/RV-60_동적E2E전수재검증결과서_v0.1.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/02.상시관리/MG-40_품질관리대장/MG-40_RV-60_잔여FAIL_결함분류_20260616.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/02.상시관리/MG-40_품질관리대장/MG-40_RV-60_잔여FAIL_결함분류_20260616.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/02.상시관리/MG-40_품질관리대장/MG-40_RV-60_잔여FAIL_결함분류_20260616.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/_archive/IN-20_WBS.latest.md_20260616152053",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/_archive/IN-20_WBS.latest.md_20260616152053",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/_archive/IN-20_WBS.latest.md_20260616152053",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "created",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              },
+              {
+                "change_type": "modified",
+                "coalesced": false,
+                "node_type": "file",
+                "path": "products/AgiTeamApp/03.management/01.착수준비/IN-20_WBS/IN-20_WBS.latest.md",
+                "project_id": "Panthea",
+                "root_type": "documents"
+              }
+            ]
+          }
+        },
+        {
+          "path": "http.body.error",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": {
+            "code": "artifact_watcher_unavailable",
+            "message": "Artifact watcher is not active.",
+            "details": {}
+          },
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.ok",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": false,
+          "rust": true
+        },
+        {
+          "path": "http.status",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": 503,
+          "rust": 200
+        }
+      ],
+      "case_id": "WG-ART-04-happy",
+      "result": "FAIL",
+      "py_status": 503,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-ART-05",
+      "passed": false,
+      "diff_count": 3,
+      "strict_diff_count": 2,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.error.code",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "artifact_write_failed",
+          "rust": "artifact_path_not_found"
+        },
+        {
+          "path": "http.body.error.message",
+          "policy": "normalize",
+          "kind": "value_mismatch",
+          "python": "Failed to write artifact.",
+          "rust": "Artifact path not found."
+        },
+        {
+          "path": "http.status",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": 500,
+          "rust": 404
+        }
+      ],
+      "case_id": "WG-ART-05-happy-md",
+      "result": "FAIL",
+      "py_status": 500,
+      "rs_status": 404
+    },
+    {
+      "contract_id": "WG-CHAT-01",
+      "passed": false,
+      "diff_count": 4,
+      "strict_diff_count": 4,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.rooms[0].connection_state",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "disconnected",
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.data.rooms[0].runtime_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "disconnected",
+          "rust": "live"
+        },
+        {
+          "path": "http.body.data.rooms[1].collector_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "running",
+          "rust": "unknown"
+        },
+        {
+          "path": "http.body.data.rooms[1].connection_state",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "disconnected",
+          "rust": "<MISSING>"
+        }
+      ],
+      "case_id": "WG-CHAT-01-happy",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-CHAT-02",
+      "passed": false,
+      "diff_count": 5,
+      "strict_diff_count": 5,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.messages[0].attachments",
+          "policy": "strict",
+          "kind": "array_length",
+          "python": 1,
+          "rust": 0
+        },
+        {
+          "path": "http.body.data.messages[0].attachments[0]",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": {
+            "kind": "image",
+            "width": 1,
+            "height": 1,
+            "sha256": "seed-rv60-preview",
+            "filename": "upload-20260616T090000Z-rv60.png",
+            "mime_type": "image/png",
+            "expires_at": "<TS#3>",
+            "size_bytes": 67,
+            "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+            "attachment_id": "att_0000000000004000800000000000601"
+          },
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.data.messages[0].provenance.runtime_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "disconnected",
+          "rust": "live"
+        },
+        {
+          "path": "http.body.data.messages[1].provenance.runtime_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "disconnected",
+          "rust": "live"
+        },
+        {
+          "path": "http.body.data.room.collector_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "running",
+          "rust": "unknown"
+        }
+      ],
+      "case_id": "WG-CHAT-02-happy",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-CHAT-03",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-CHAT-03-happy",
+      "result": "PASS",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-CHAT-04",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-CHAT-04-happy",
+      "result": "PASS",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-CHAT-05",
+      "passed": false,
+      "diff_count": 1,
+      "strict_diff_count": 1,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.message.provenance.transport",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "websocket",
+          "rust": "<MISSING>"
+        }
+      ],
+      "case_id": "WG-CHAT-05-happy-collect",
+      "result": "FAIL",
+      "py_status": 201,
+      "rs_status": 201
+    },
+    {
+      "contract_id": "WG-CHAT-06",
+      "passed": true,
+      "diff_count": 0,
+      "strict_diff_count": 0,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [],
+      "case_id": "WG-CHAT-06-happy-collect",
+      "result": "PASS",
+      "py_status": 201,
+      "rs_status": 201
+    },
+    {
+      "contract_id": "WG-HOOK-01",
+      "passed": false,
+      "diff_count": 1,
+      "strict_diff_count": 1,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.event.payload.token",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "***MASKED***",
+          "rust": "<MISSING>"
+        }
+      ],
+      "case_id": "WG-HOOK-01-stop-transcript",
+      "result": "FAIL",
+      "py_status": 201,
+      "rs_status": 201
+    },
+    {
+      "contract_id": "WG-MSG-01",
+      "passed": false,
+      "diff_count": 2,
+      "strict_diff_count": 2,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.rooms[0].collector_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "running",
+          "rust": "unknown"
+        },
+        {
+          "path": "http.body.data.rooms[1].connection_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "disconnected",
+          "rust": "connected"
+        }
+      ],
+      "case_id": "WG-MSG-01-happy",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-MSG-02",
+      "passed": false,
+      "diff_count": 4,
+      "strict_diff_count": 4,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data",
+          "policy": "strict",
+          "kind": "missing_in_python",
+          "python": "<MISSING>",
+          "rust": {
+            "ack": {
+              "accepted": true,
+              "agent_session_id": null,
+              "client_message_id": "rv40-client-msg-001",
+              "correlation_id": "<UUID#1>",
+              "message_id": "<UUID#2>",
+              "project_id": "Panthea",
+              "provenance": {
+                "is_mock": false,
+                "is_real_data": true,
+                "origin": "pm_bridge",
+                "runtime_state": "live",
+                "transport": "rest"
+              },
+              "role": "PM",
+              "room_id": "<UUID#3>",
+              "send_submitted": true,
+              "status": "sent",
+              "surface_id": "surface:dummy",
+              "workspace_id": null
+            },
+            "message": {
+              "agent_session_id": null,
+              "attachments": [],
+              "client_message_id": "rv40-client-msg-001",
+              "correlation_id": "<UUID#1>",
+              "direction": "outbound",
+              "message_id": "<UUID#2>",
+              "message_type": "user_message",
+              "occurred_at": "<TS#1>",
+              "project_id": "Panthea",
+              "provenance": {
+                "is_mock": false,
+                "is_real_data": true,
+                "origin": "webgui",
+                "runtime_state": "live"
+              },
+              "recorded_at": "<TS#2>",
+              "role": "PM",
+              "room_id": "<UUID#3>",
+              "source": "webgui",
+              "status": "sent",
+              "surface_id": "surface:dummy",
+              "team_session_id": null,
+              "text": "RV40 parity ping",
+              "updated_at": "<TS#2>"
+            }
+          }
+        },
+        {
+          "path": "http.body.error",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": {
+            "code": "surface_not_found",
+            "message": "No active cmux surface for target role.",
+            "details": {}
+          },
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.ok",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": false,
+          "rust": true
+        },
+        {
+          "path": "http.status",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": 409,
+          "rust": 201
+        }
+      ],
+      "case_id": "WG-MSG-02-happy-fake-mux",
+      "result": "FAIL",
+      "py_status": 409,
+      "rs_status": 201
+    },
+    {
+      "contract_id": "WG-MSG-03",
+      "passed": false,
+      "diff_count": 2,
+      "strict_diff_count": 2,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.message.attachments",
+          "policy": "strict",
+          "kind": "array_length",
+          "python": 1,
+          "rust": 0
+        },
+        {
+          "path": "http.body.data.message.attachments[0]",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": {
+            "kind": "image",
+            "width": 1,
+            "height": 1,
+            "sha256": "seed-rv60-preview",
+            "filename": "upload-20260616T090000Z-rv60.png",
+            "mime_type": "image/png",
+            "expires_at": "<TS#1>",
+            "size_bytes": 67,
+            "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+            "attachment_id": "att_0000000000004000800000000000601"
+          },
+          "rust": "<MISSING>"
+        }
+      ],
+      "case_id": "WG-MSG-03-happy",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-MSG-04",
+      "passed": false,
+      "diff_count": 4,
+      "strict_diff_count": 4,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.data.updates[0].message.provenance.transport",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "polling",
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.data.updates[1].message.attachments",
+          "policy": "strict",
+          "kind": "array_length",
+          "python": 1,
+          "rust": 0
+        },
+        {
+          "path": "http.body.data.updates[1].message.attachments[0]",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": {
+            "kind": "image",
+            "width": 1,
+            "height": 1,
+            "sha256": "seed-rv60-preview",
+            "filename": "upload-20260616T090000Z-rv60.png",
+            "mime_type": "image/png",
+            "expires_at": "<TS#3>",
+            "size_bytes": 67,
+            "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+            "attachment_id": "att_0000000000004000800000000000601"
+          },
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.data.updates[1].message.provenance.transport",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "polling",
+          "rust": "<MISSING>"
+        }
+      ],
+      "case_id": "WG-MSG-04-happy",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 200
+    },
+    {
+      "contract_id": "WG-MSG-05",
+      "case_id": "WG-MSG-05-replay-live",
+      "result": "SKIP",
+      "reason": "WS 클라이언트 부재(표준 라이브러리). RV-60 대상"
+    },
+    {
+      "contract_id": "WG-MSG-06",
+      "passed": false,
+      "diff_count": 2,
+      "strict_diff_count": 1,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body.error.details.errors",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": [
+            {
+              "loc": [
+                "body",
+                "project_id"
+              ],
+              "type": "missing"
+            },
+            {
+              "loc": [
+                "body",
+                "file"
+              ],
+              "type": "missing"
+            }
+          ],
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.error.message",
+          "policy": "normalize",
+          "kind": "value_mismatch",
+          "python": "Request validation failed.",
+          "rust": "Invalid `boundary` for `multipart/form-data` request"
+        }
+      ],
+      "case_id": "WG-MSG-06-happy-png",
+      "result": "FAIL",
+      "py_status": 400,
+      "rs_status": 400
+    },
+    {
+      "contract_id": "WG-MSG-06.7",
+      "passed": false,
+      "diff_count": 8,
+      "strict_diff_count": 8,
+      "security_violations": [],
+      "warnings": [],
+      "diffs": [
+        {
+          "path": "http.body._nonjson_len",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": 68,
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.body.error",
+          "policy": "strict",
+          "kind": "missing_in_python",
+          "python": "<MISSING>",
+          "rust": {
+            "code": "attachment_not_found",
+            "details": {},
+            "message": "Attachment not found."
+          }
+        },
+        {
+          "path": "http.body.ok",
+          "policy": "strict",
+          "kind": "missing_in_python",
+          "python": "<MISSING>",
+          "rust": false
+        },
+        {
+          "path": "http.headers.accept-ranges",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "bytes",
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.headers.content-security-policy",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "default-src 'none'",
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.headers.content-type",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "image/png",
+          "rust": "application/json"
+        },
+        {
+          "path": "http.headers.x-content-type-options",
+          "policy": "strict",
+          "kind": "missing_in_rust",
+          "python": "nosniff",
+          "rust": "<MISSING>"
+        },
+        {
+          "path": "http.status",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": 200,
+          "rust": 404
+        }
+      ],
+      "case_id": "WG-MSG-06.7-preview",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 404
+    },
+    {
+      "contract_id": "WG-PROJ-01",
+      "passed": false,
+      "diff_count": 7,
+      "strict_diff_count": 5,
+      "security_violations": [],
+      "warnings": [
+        "python 응답에 host absolute path 노출 1건 (RV-50 검토)"
+      ],
+      "diffs": [
+        {
+          "path": "http.body.data.projects[0].connection_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "disconnected",
+          "rust": "connected"
+        },
+        {
+          "path": "http.body.data.projects[0].pm_connection_state",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "absent",
+          "rust": "connected"
+        },
+        {
+          "path": "http.body.data.projects[0].roles[1]",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": "QA",
+          "rust": "DevOps"
+        },
+        {
+          "path": "http.body.data.projects[0].root_path",
+          "policy": "normalize",
+          "kind": "type_mismatch",
+          "python": "<ABS_PATH>",
+          "rust": null
+        },
+        {
+          "path": "http.body.data.projects[0].selected",
+          "policy": "strict",
+          "kind": "value_mismatch",
+          "python": false,
+          "rust": true
+        },
+        {
+          "path": "http.body.data.projects[0].workspace_id",
+          "policy": "normalize",
+          "kind": "type_mismatch",
+          "python": null,
+          "rust": "workspace:equiv"
+        },
+        {
+          "path": "http.body.data.selected_project_id",
+          "policy": "strict",
+          "kind": "type_mismatch",
+          "python": null,
+          "rust": "Panthea"
+        }
+      ],
+      "case_id": "WG-PROJ-01-happy",
+      "result": "FAIL",
+      "py_status": 200,
+      "rs_status": 200
+    }
+  ]
+}

@@ -39,9 +39,19 @@ pub struct CollectMessageRequest {
 }
 
 /// 공개 메시지 응답 (Python message_to_dict 정합). project_id 는 호출처(room) 주입.
-pub fn message_to_dict(m: &MessageRow, project_id: &str) -> Value {
+pub fn message_to_dict(m: &MessageRow, project_id: &str, transport: Option<&str>) -> Value {
     let origin = if m.source.is_empty() { "mock" } else { m.source.as_str() };
     let is_real = REAL_SOURCES.contains(&origin);
+    // Python provenance_dict 정합: origin/runtime_state/is_real_data/is_mock(+transport 선택).
+    let mut provenance = json!({
+        "origin": origin,
+        "runtime_state": if is_real { "live" } else { "mock" },
+        "is_real_data": is_real,
+        "is_mock": origin == "mock",
+    });
+    if let Some(t) = transport {
+        provenance["transport"] = json!(t);
+    }
     json!({
         "message_id": m.message_id,
         "project_id": project_id,
@@ -55,14 +65,10 @@ pub fn message_to_dict(m: &MessageRow, project_id: &str) -> Value {
         "source": m.source,
         "message_type": m.message_type,
         "text": m.normalized_text,
-        "attachments": [],
+        // DS-40 §4.2.1 이미지 첨부 공개 메타(절대경로 미포함). 없으면 [].
+        "attachments": m.attachments_json,
         "status": m.status,
-        "provenance": {
-            "origin": origin,
-            "is_real_data": is_real,
-            "is_mock": origin == "mock",
-            "runtime_state": "live",
-        },
+        "provenance": provenance,
         "occurred_at": m.occurred_at,
         "recorded_at": m.recorded_at,
         "updated_at": m.updated_at,
@@ -100,12 +106,12 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
     // dedupe 1: (provider, record_id)
     if let (Some(p), Some(rec)) = (req.provider.as_deref(), req.transcript_record_id.as_deref()) {
         if let Some(existing) = repo.find_message_by_record(p, rec).await? {
-            return Ok(json!({ "message": message_to_dict(&existing, &room.project_id), "deduplicated": true }));
+            return Ok(json!({ "message": message_to_dict(&existing, &room.project_id, Some("websocket")), "deduplicated": true }));
         }
     }
     // dedupe 2: (room, source, raw_hash)
     if let Some(existing) = repo.find_message_by_hash(&room.room_id, &req.source, &raw_hash).await? {
-        return Ok(json!({ "message": message_to_dict(&existing, &room.project_id), "deduplicated": true }));
+        return Ok(json!({ "message": message_to_dict(&existing, &room.project_id, Some("websocket")), "deduplicated": true }));
     }
 
     let is_inbound = req.message_type == "assistant_message" || req.message_type == "unmatched";
@@ -142,7 +148,7 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
         // raw_text=mask_text(원본), normalized=sanitize_tool_leak(표시본). raw_hash 는 원본 기준(위에서 계산, dedup 불변).
         raw_text: mask_text(req.raw_text.as_deref()),
         normalized_text: sanitize_tool_leak(Some(&req.normalized_text)).unwrap_or_default(),
-        raw_hash,
+        raw_hash: Some(raw_hash),
         status,
         occurred_at_iso: req.occurred_at.clone(),
     };
@@ -150,7 +156,7 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
     repo.touch_room_last_message(&room.room_id, &msg.message_id, &msg.occurred_at, is_inbound)
         .await?;
 
-    let payload = message_to_dict(&msg, &room.project_id);
+    let payload = message_to_dict(&msg, &room.project_id, Some("websocket"));
     // WS publish — 방 구독자에게 message_received/message_sent fanout (Python 동등).
     let ws = json!({
         "type": "message_update",
@@ -167,5 +173,5 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
     });
     publisher.publish(&room.room_id, ws, &room.project_id);
 
-    Ok(json!({ "message": message_to_dict(&msg, &room.project_id), "deduplicated": false }))
+    Ok(json!({ "message": message_to_dict(&msg, &room.project_id, Some("websocket")), "deduplicated": false }))
 }

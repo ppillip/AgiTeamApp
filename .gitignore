@@ -5,7 +5,11 @@ node_modules
 .env
 .env.*
 !.env.example
+!.env.equiv.example
 *.local
+__pycache__/
+*.pyc
+backend/_backup/
 vite.config.js.timestamp-*
 src-tauri/target/
 backend-rs/target/

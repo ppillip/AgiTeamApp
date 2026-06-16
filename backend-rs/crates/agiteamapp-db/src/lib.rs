@@ -51,7 +51,7 @@ fn iso_str(s: String) -> String {
 const MSG_COLS: &str = "message_id::text AS message_id, room_id::text AS room_id, \
      correlation_id::text AS correlation_id, role_id, surface_id, \
      agent_session_id::text AS agent_session_id, team_session_id, direction, source, \
-     message_type, normalized_text, status, occurred_at::text AS occurred_at, \
+     message_type, normalized_text, status, attachments_json, occurred_at::text AS occurred_at, \
      recorded_at::text AS recorded_at, updated_at::text AS updated_at";
 
 /// webgui_room SELECT 공통 컬럼 (uuid/timestamp text 캐스트, unread_count→bigint).
@@ -112,6 +112,11 @@ fn map_message(row: &PgRow) -> Result<MessageRow, RepoError> {
         message_type: tg!(row, "message_type"),
         normalized_text: tg!(row, "normalized_text"),
         status: tg!(row, "status"),
+        attachments_json: row
+            .try_get::<Option<serde_json::Value>, _>("attachments_json")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| serde_json::json!([])),
         occurred_at: iso_str(tg!(row, "occurred_at")),
         recorded_at: iso_str(tg!(row, "recorded_at")),
         updated_at: iso_str(tg!(row, "updated_at")),
@@ -372,6 +377,20 @@ impl WebguiRepository for PgRepository {
             .await
             .map_err(|e| RepoError(format!("get_room_full: {e}")))?;
         row.as_ref().map(map_room).transpose()
+    }
+
+    async fn active_collector_state(&self, room_id: &str) -> Result<Option<String>, RepoError> {
+        // active(ended_at IS NULL) agent_session 의 collector_state (Python active_session_for_room 정합).
+        let row = sqlx::query(
+            "SELECT collector_state FROM webgui_agent_session \
+             WHERE room_id = $1::uuid AND ended_at IS NULL \
+             ORDER BY started_at DESC LIMIT 1",
+        )
+        .bind(room_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| RepoError(format!("active_collector_state: {e}")))?;
+        Ok(row.and_then(|r| r.try_get::<Option<String>, _>("collector_state").ok().flatten()))
     }
 
     async fn list_rooms(&self, project_id: &str) -> Result<Vec<RoomFull>, RepoError> {

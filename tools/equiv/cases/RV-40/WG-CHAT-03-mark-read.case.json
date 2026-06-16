@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-CHAT-03-happy",
+  "contract_id": "WG-CHAT-03",
+  "title": "read marker 갱신과 unread reset",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/rooms/00000000-0000-4000-8000-000000000101/read",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {},
+    "body": { "last_read_message_id": "00000000-0000-4000-8000-000000000302" }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["db.webgui_room[]"]
+}

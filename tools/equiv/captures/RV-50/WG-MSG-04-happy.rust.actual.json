@@ -1,0 +1,84 @@
+{
+  "case_id": "WG-MSG-04-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "2015"
+    },
+    "body": {
+      "data": {
+        "next_cursor": "2026-06-16T09:01:00+00:00|message:00000000-0000-4000-8000-000000000302",
+        "updates": [
+          {
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "event": null,
+            "message": {
+              "agent_session_id": "00000000-0000-4000-8000-000000000201",
+              "attachments": [],
+              "correlation_id": "00000000-0000-4000-8000-000000000501",
+              "direction": "outbound",
+              "message_id": "00000000-0000-4000-8000-000000000301",
+              "message_type": "user_message",
+              "occurred_at": "2026-06-16T09:00:00+00:00",
+              "project_id": "Panthea",
+              "provenance": {
+                "is_mock": false,
+                "is_real_data": true,
+                "origin": "webgui",
+                "runtime_state": "live"
+              },
+              "recorded_at": "2026-06-16T09:00:00+00:00",
+              "role": "QA",
+              "room_id": "00000000-0000-4000-8000-000000000101",
+              "source": "webgui",
+              "status": "sent",
+              "surface_id": "surface:equiv-qa",
+              "team_session_id": "rv60-team-session",
+              "text": "RV60 seeded user prompt",
+              "updated_at": "2026-06-16T09:00:01+00:00"
+            },
+            "occurred_at": "2026-06-16T09:00:00+00:00",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "update_id": "message:00000000-0000-4000-8000-000000000301",
+            "update_type": "message_sent"
+          },
+          {
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "event": null,
+            "message": {
+              "agent_session_id": "00000000-0000-4000-8000-000000000201",
+              "attachments": [],
+              "correlation_id": "00000000-0000-4000-8000-000000000501",
+              "direction": "inbound",
+              "message_id": "00000000-0000-4000-8000-000000000302",
+              "message_type": "assistant_message",
+              "occurred_at": "2026-06-16T09:01:00+00:00",
+              "project_id": "Panthea",
+              "provenance": {
+                "is_mock": false,
+                "is_real_data": true,
+                "origin": "transcript",
+                "runtime_state": "live"
+              },
+              "recorded_at": "2026-06-16T09:01:00+00:00",
+              "role": "QA",
+              "room_id": "00000000-0000-4000-8000-000000000101",
+              "source": "transcript",
+              "status": "received",
+              "surface_id": "surface:equiv-qa",
+              "team_session_id": "rv60-team-session",
+              "text": "RV60 seeded assistant reply",
+              "updated_at": "2026-06-16T09:01:01+00:00"
+            },
+            "occurred_at": "2026-06-16T09:01:00+00:00",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "update_id": "message:00000000-0000-4000-8000-000000000302",
+            "update_type": "message_received"
+          }
+        ]
+      },
+      "ok": true
+    }
+  }
+}

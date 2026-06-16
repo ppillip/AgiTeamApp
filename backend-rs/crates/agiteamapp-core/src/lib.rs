@@ -29,12 +29,12 @@ pub use attachments::{detect_image, epoch_to_iso, AttachmentService};
 pub use discovery::{parse_tree, DiscoveryRegistry};
 pub use event::{collect_event, event_to_dict, CollectEventRequest};
 pub use events::{EventPublisher, NoopPublisher};
-pub use hook::{collect_hook, HookCollectRequest, HookCollectResult};
+pub use hook::{collect_hook, HookCollectRequest};
 pub use masking::{mask_payload, mask_text, sanitize_tool_leak};
 pub use message::{collect_message, message_to_dict, CollectMessageRequest};
 pub use query::{
     get_message, list_events_uc, list_projects, list_room_messages, list_rooms, mark_read,
-    message_updates, room_summary_dict, runtime_status,
+    message_update_type, message_updates, room_summary_dict, runtime_status,
 };
 pub use send::{send_message, MuxPort, PmTarget, SendMessageRequest, PM_ROLE_ID};
 pub use transcript::{
@@ -166,6 +166,9 @@ mod tests {
             Ok(())
         }
         async fn get_room_full(&self, _room_id: &str) -> Result<Option<RoomFull>, RepoError> {
+            Ok(None)
+        }
+        async fn active_collector_state(&self, _room_id: &str) -> Result<Option<String>, RepoError> {
             Ok(None)
         }
         async fn list_rooms(&self, _project_id: &str) -> Result<Vec<RoomFull>, RepoError> {

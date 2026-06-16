@@ -1,0 +1,18 @@
+{
+  "case_id": "WG-MSG-06.7-preview",
+  "http": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "99"
+    },
+    "body": {
+      "error": {
+        "code": "attachment_not_found",
+        "details": {},
+        "message": "Attachment not found."
+      },
+      "ok": false
+    }
+  }
+}

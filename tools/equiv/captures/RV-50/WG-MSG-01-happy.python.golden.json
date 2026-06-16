@@ -1,0 +1,41 @@
+{
+  "case_id": "WG-MSG-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-length": "638",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "project_id": "Panthea",
+        "server_time": "2026-06-16T06:25:10.628797+00:00",
+        "rooms": [
+          {
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "role": "QA",
+            "display_name": "아르고스",
+            "agent_type": "codex",
+            "surface_id": "surface:equiv-qa",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "ready_state": "ready",
+            "collector_state": "running",
+            "connection_state": "disconnected"
+          },
+          {
+            "room_id": "00000000-0000-4000-8000-000000000100",
+            "role": "PM",
+            "display_name": "제우스",
+            "agent_type": "pm",
+            "surface_id": "surface:equiv-pm",
+            "agent_session_id": null,
+            "ready_state": "ready",
+            "collector_state": "unknown",
+            "connection_state": "disconnected"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "case_id": "META-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-length": "75",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "status": "ok",
+        "version": "0.1.0",
+        "project_id": "Panthea"
+      }
+    }
+  }
+}

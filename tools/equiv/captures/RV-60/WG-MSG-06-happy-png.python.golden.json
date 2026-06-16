@@ -1,0 +1,83 @@
+{
+  "case_id": "WG-MSG-06-happy-png",
+  "http": {
+    "status": 503,
+    "headers": {
+      "content-length": "122",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": false,
+      "error": {
+        "code": "attachment_storage_unavailable",
+        "message": "Attachment storage is unavailable.",
+        "details": {}
+      }
+    }
+  },
+  "db": {
+    "webgui_message": [
+      {
+        "source": "webgui",
+        "status": "sent",
+        "role_id": "QA",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "provider": null,
+        "raw_hash": "seed:rv60:user:001",
+        "raw_text": "RV60 seeded user prompt",
+        "direction": "outbound",
+        "message_id": "00000000-0000-4000-8000-000000000301",
+        "surface_id": "surface:equiv-qa",
+        "updated_at": "2026-06-16T09:00:01+00:00",
+        "occurred_at": "2026-06-16T09:00:00+00:00",
+        "recorded_at": "2026-06-16T09:00:00+00:00",
+        "message_type": "user_message",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "normalized_text": "RV60 seeded user prompt",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": null,
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "attachments_json": null,
+        "transcript_offset": null,
+        "transcript_record_id": null
+      },
+      {
+        "source": "transcript",
+        "status": "received",
+        "role_id": "QA",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "provider": "claude_code",
+        "raw_hash": "seed:rv60:assistant:001",
+        "raw_text": "RV60 seeded assistant reply",
+        "direction": "inbound",
+        "message_id": "00000000-0000-4000-8000-000000000302",
+        "surface_id": "surface:equiv-qa",
+        "updated_at": "2026-06-16T09:01:01+00:00",
+        "occurred_at": "2026-06-16T09:01:00+00:00",
+        "recorded_at": "2026-06-16T09:01:00+00:00",
+        "message_type": "assistant_message",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "normalized_text": "RV60 seeded assistant reply",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": "fixtures/transcripts/rv40-stop.jsonl",
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "attachments_json": [
+          {
+            "kind": "image",
+            "width": 1,
+            "height": 1,
+            "sha256": "seed-rv60-preview",
+            "filename": "upload-20260616T090000Z-rv60.png",
+            "mime_type": "image/png",
+            "expires_at": "2026-06-17T09:00:00Z",
+            "size_bytes": 67,
+            "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+            "attachment_id": "att_0000000000004000800000000000601"
+          }
+        ],
+        "transcript_offset": "1",
+        "transcript_record_id": "rv60-transcript-seed-001"
+      }
+    ]
+  }
+}

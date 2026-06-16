@@ -1,0 +1,118 @@
+{
+  "case_id": "WG-CHAT-02-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-length": "2630",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "room": {
+          "room_id": "00000000-0000-4000-8000-000000000101",
+          "project_id": "Panthea",
+          "role": "QA",
+          "display_name": "아르고스",
+          "agent_type": "codex",
+          "room_type": "role",
+          "surface_id": "surface:equiv-qa",
+          "agent_session_id": "00000000-0000-4000-8000-000000000201",
+          "team_session_id": "rv60-team-session",
+          "agent_id": "rv60-qa-agent",
+          "ready_state": "ready",
+          "collector_state": "unknown",
+          "runtime_state": "live",
+          "runtime_activity": "active",
+          "last_active_at": "2026-06-16T09:02:00+00:00",
+          "provenance": {
+            "origin": "transcript",
+            "runtime_state": "live",
+            "is_real_data": true,
+            "is_mock": false
+          },
+          "last_message": {
+            "message_id": "00000000-0000-4000-8000-000000000302",
+            "text": "RV60 seeded assistant reply",
+            "direction": "inbound",
+            "status": "received",
+            "occurred_at": "2026-06-16T09:01:00+00:00"
+          },
+          "last_message_at": "2026-06-16T09:01:00+00:00",
+          "read_marker_at": null,
+          "unread_count": 2
+        },
+        "messages": [
+          {
+            "message_id": "00000000-0000-4000-8000-000000000302",
+            "project_id": "Panthea",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "role": "QA",
+            "surface_id": "surface:equiv-qa",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "team_session_id": "rv60-team-session",
+            "direction": "inbound",
+            "source": "transcript",
+            "message_type": "assistant_message",
+            "text": "RV60 seeded assistant reply",
+            "attachments": [
+              {
+                "kind": "image",
+                "width": 1,
+                "height": 1,
+                "sha256": "seed-rv60-preview",
+                "filename": "upload-20260616T090000Z-rv60.png",
+                "mime_type": "image/png",
+                "expires_at": "2026-06-17T09:00:00Z",
+                "size_bytes": 67,
+                "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+                "attachment_id": "att_0000000000004000800000000000601"
+              }
+            ],
+            "status": "received",
+            "provenance": {
+              "origin": "transcript",
+              "runtime_state": "live",
+              "is_real_data": true,
+              "is_mock": false
+            },
+            "occurred_at": "2026-06-16T09:01:00+00:00",
+            "recorded_at": "2026-06-16T09:01:00+00:00",
+            "updated_at": "2026-06-16T09:01:01+00:00"
+          },
+          {
+            "message_id": "00000000-0000-4000-8000-000000000301",
+            "project_id": "Panthea",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "role": "QA",
+            "surface_id": "surface:equiv-qa",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "team_session_id": "rv60-team-session",
+            "direction": "outbound",
+            "source": "webgui",
+            "message_type": "user_message",
+            "text": "RV60 seeded user prompt",
+            "attachments": [],
+            "status": "sent",
+            "provenance": {
+              "origin": "webgui",
+              "runtime_state": "live",
+              "is_real_data": true,
+              "is_mock": false
+            },
+            "occurred_at": "2026-06-16T09:00:00+00:00",
+            "recorded_at": "2026-06-16T09:00:00+00:00",
+            "updated_at": "2026-06-16T09:00:01+00:00"
+          }
+        ],
+        "page": {
+          "limit": 20,
+          "next_cursor": null,
+          "has_more": false
+        }
+      }
+    }
+  }
+}

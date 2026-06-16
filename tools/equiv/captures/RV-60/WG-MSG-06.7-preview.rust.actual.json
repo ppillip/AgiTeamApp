@@ -1,0 +1,14 @@
+{
+  "case_id": "WG-MSG-06.7-preview",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "image/png",
+      "accept-ranges": "bytes",
+      "content-security-policy": "default-src 'none'",
+      "x-content-type-options": "nosniff",
+      "content-length": "68"
+    },
+    "body_b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X6n9sAAAAASUVORK5CYII="
+  }
+}

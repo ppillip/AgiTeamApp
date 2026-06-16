@@ -1,0 +1,18 @@
+{
+  "case_id": "WG-ART-05-happy-md",
+  "http": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "105"
+    },
+    "body": {
+      "error": {
+        "code": "artifact_path_not_found",
+        "details": {},
+        "message": "Artifact path not found."
+      },
+      "ok": false
+    }
+  }
+}

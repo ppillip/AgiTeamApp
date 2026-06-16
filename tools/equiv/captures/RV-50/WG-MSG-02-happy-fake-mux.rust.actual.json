@@ -1,0 +1,62 @@
+{
+  "case_id": "WG-MSG-02-happy-fake-mux",
+  "http": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "1193"
+    },
+    "body": {
+      "data": {
+        "ack": {
+          "accepted": true,
+          "agent_session_id": null,
+          "client_message_id": "rv40-client-msg-001",
+          "correlation_id": "bf1c0b21-1c70-4aa8-8e8b-601ae495c2d6",
+          "message_id": "ea01c825-169d-4ea6-be85-90a19ba6788b",
+          "project_id": "Panthea",
+          "provenance": {
+            "is_mock": false,
+            "is_real_data": true,
+            "origin": "pm_bridge",
+            "runtime_state": "live",
+            "transport": "rest"
+          },
+          "role": "PM",
+          "room_id": "00000000-0000-4000-8000-000000000100",
+          "send_submitted": true,
+          "status": "sent",
+          "surface_id": "surface:dummy",
+          "workspace_id": null
+        },
+        "message": {
+          "agent_session_id": null,
+          "attachments": [],
+          "client_message_id": "rv40-client-msg-001",
+          "correlation_id": "bf1c0b21-1c70-4aa8-8e8b-601ae495c2d6",
+          "direction": "outbound",
+          "message_id": "ea01c825-169d-4ea6-be85-90a19ba6788b",
+          "message_type": "user_message",
+          "occurred_at": "2026-06-16T06:25:10.740818+00:00",
+          "project_id": "Panthea",
+          "provenance": {
+            "is_mock": false,
+            "is_real_data": true,
+            "origin": "webgui",
+            "runtime_state": "live"
+          },
+          "recorded_at": "2026-06-16T06:25:10.740945+00:00",
+          "role": "PM",
+          "room_id": "00000000-0000-4000-8000-000000000100",
+          "source": "webgui",
+          "status": "sent",
+          "surface_id": "surface:dummy",
+          "team_session_id": null,
+          "text": "RV40 parity ping",
+          "updated_at": "2026-06-16T06:25:10.740945+00:00"
+        }
+      },
+      "ok": true
+    }
+  }
+}

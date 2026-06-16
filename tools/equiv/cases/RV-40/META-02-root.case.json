@@ -1,0 +1,8 @@
+{
+  "case_id": "META-02-happy",
+  "contract_id": "META-02",
+  "title": "GET / root 보조 응답",
+  "request": { "kind": "http", "method": "GET", "path": "/", "headers": {}, "query": {}, "body": null },
+  "seed": {},
+  "array_sort_paths": []
+}

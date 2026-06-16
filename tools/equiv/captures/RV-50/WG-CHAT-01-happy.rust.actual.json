@@ -1,0 +1,78 @@
+{
+  "case_id": "WG-CHAT-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "1485"
+    },
+    "body": {
+      "data": {
+        "project_id": "Panthea",
+        "rooms": [
+          {
+            "agent_id": "rv60-qa-agent",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "agent_type": "codex",
+            "collector_state": "unknown",
+            "display_name": "아르고스",
+            "last_active_at": "2026-06-16T09:02:00+00:00",
+            "last_message": {
+              "direction": "inbound",
+              "message_id": "00000000-0000-4000-8000-000000000302",
+              "occurred_at": "2026-06-16T09:01:00+00:00",
+              "status": "received",
+              "text": "RV60 seeded assistant reply"
+            },
+            "last_message_at": "2026-06-16T09:01:00+00:00",
+            "project_id": "Panthea",
+            "provenance": {
+              "is_mock": false,
+              "is_real_data": true,
+              "origin": "transcript",
+              "runtime_state": "disconnected"
+            },
+            "read_marker_at": null,
+            "ready_state": "ready",
+            "role": "QA",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "room_type": "role",
+            "runtime_activity": "active",
+            "runtime_state": "disconnected",
+            "surface_id": "surface:equiv-qa",
+            "team_session_id": "rv60-team-session",
+            "unread_count": 2
+          },
+          {
+            "agent_id": "rv60-pm-agent",
+            "agent_session_id": null,
+            "agent_type": "pm",
+            "collector_state": "unknown",
+            "display_name": "제우스",
+            "last_active_at": null,
+            "last_message": null,
+            "last_message_at": "2026-06-16T08:59:00+00:00",
+            "project_id": "Panthea",
+            "provenance": {
+              "is_mock": true,
+              "is_real_data": false,
+              "origin": "mock",
+              "runtime_state": "mock"
+            },
+            "read_marker_at": null,
+            "ready_state": "ready",
+            "role": "PM",
+            "room_id": "00000000-0000-4000-8000-000000000100",
+            "room_type": "pm",
+            "runtime_activity": "unknown",
+            "runtime_state": "live",
+            "surface_id": "surface:equiv-pm",
+            "team_session_id": "rv60-team-session",
+            "unread_count": 0
+          }
+        ]
+      },
+      "ok": true
+    }
+  }
+}

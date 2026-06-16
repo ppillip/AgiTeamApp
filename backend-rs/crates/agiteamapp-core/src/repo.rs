@@ -1,6 +1,6 @@
 //! 저장 포트(trait) + row/에러 타입 + 공용 헬퍼. 전송·DB 구현 무관.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// 저장 포트 에러 (DB 구현 무관 표현).
@@ -13,16 +13,24 @@ impl std::fmt::Display for RepoError {
 }
 impl std::error::Error for RepoError {}
 
-/// usecase 레벨 API 에러 (Python WebguiError 정합 — code/http/message).
+/// usecase 레벨 API 에러 (Python WebguiError 정합 — code/http/message/details).
+/// RV-55 §5.1: 공개 에러 envelope는 `{ok:false,error:{code,message,details}}`가 정본.
+/// details 는 object 이며 없으면 `{}` 로 반환한다.
 #[derive(Debug)]
 pub struct ApiError {
     pub code: &'static str,
     pub http: u16,
     pub message: String,
+    pub details: Value,
 }
 impl ApiError {
     pub fn new(code: &'static str, http: u16, message: impl Into<String>) -> Self {
-        Self { code, http, message: message.into() }
+        Self { code, http, message: message.into(), details: json!({}) }
+    }
+    /// details object 부착(예: validation errors[]). 빈 값이면 `{}` 유지.
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = details;
+        self
     }
 }
 impl std::fmt::Display for ApiError {
@@ -69,6 +77,8 @@ pub struct MessageRow {
     pub message_type: String,
     pub normalized_text: String,
     pub status: String,
+    /// 이미지 첨부 공개 메타(jsonb). 없으면 `[]`. (DS-40 §4.2.1)
+    pub attachments_json: Value,
     pub occurred_at: String,
     pub recorded_at: String,
     pub updated_at: String,
@@ -92,7 +102,9 @@ pub struct NewMessage {
     pub transcript_record_id: Option<String>,
     pub raw_text: Option<String>,
     pub normalized_text: String,
-    pub raw_hash: String,
+    // nullable (migration 0001: text, unique index는 raw_hash IS NOT NULL 조건).
+    // outbound 선저장은 Python 과 동일하게 None (dedup 비대상).
+    pub raw_hash: Option<String>,
     pub status: String,
     pub occurred_at_iso: String,
 }
@@ -228,6 +240,10 @@ pub trait WebguiRepository: Send + Sync {
 
     // --- 조회(GET) ---------------------------------------------------------
     async fn get_room_full(&self, room_id: &str) -> Result<Option<RoomFull>, RepoError>;
+
+    /// 방의 active(ended_at IS NULL) agent_session collector_state. 없으면 None.
+    /// (Python rooms.py active_session_for_room().collector_state 정합)
+    async fn active_collector_state(&self, room_id: &str) -> Result<Option<String>, RepoError>;
 
     /// 프로젝트의 방 목록 (last_message_at desc nullslast, created_at asc).
     async fn list_rooms(&self, project_id: &str) -> Result<Vec<RoomFull>, RepoError>;

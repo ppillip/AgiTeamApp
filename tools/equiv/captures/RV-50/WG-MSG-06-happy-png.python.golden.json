@@ -1,0 +1,35 @@
+{
+  "case_id": "WG-MSG-06-happy-png",
+  "http": {
+    "status": 400,
+    "headers": {
+      "content-length": "197",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": false,
+      "error": {
+        "code": "invalid_request",
+        "message": "Request validation failed.",
+        "details": {
+          "errors": [
+            {
+              "loc": [
+                "body",
+                "project_id"
+              ],
+              "type": "missing"
+            },
+            {
+              "loc": [
+                "body",
+                "file"
+              ],
+              "type": "missing"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

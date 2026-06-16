@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-CHAT-01-happy",
+  "contract_id": "WG-CHAT-01",
+  "title": "project별 room summary와 last message 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/rooms",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": { "project_id": "Panthea", "with_last_message": true },
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "activity_seed": "fixtures/runtime/activity-pulse.json" },
+  "array_sort_paths": ["http.body.data.rooms[]"]
+}

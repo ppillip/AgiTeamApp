@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use agiteamapp_core::{
     collect_event, collect_hook, collect_message, collect_runtime_activity, get_message,
-    list_events_uc, list_projects, list_room_messages, list_rooms, mark_read, message_updates,
+    list_events_uc, list_projects, list_room_messages, list_rooms, mark_read,
+    message_to_dict, message_update_type, message_updates,
     runtime_status, send_message, ActivityRegistry, ApiError, ArtifactChangeBuffer,
     CollectEventRequest, CollectMessageRequest, DiscoveryRegistry, EventPublisher,
     HookCollectRequest, RuntimeActivityCollectRequest,
@@ -18,6 +19,7 @@ use agiteamapp_db::PgRepository;
 use agiteamapp_mux::{CmuxAdapter, DummyMux, MuxAdapter};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
+use axum::http::header::CONTENT_TYPE;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{routing::get, routing::post, Json, Router};
@@ -104,6 +106,8 @@ struct AppState {
     projects_base: String,
     api_token: Option<String>,
     collector_token: Option<String>,
+    // WG-ART-04: watcher 비활성이면 changes 폴링은 503(Python artifact_watcher_unavailable 정합).
+    artifact_watcher_enabled: bool,
 }
 
 impl AppState {
@@ -138,7 +142,84 @@ impl AppState {
 
 fn err_response(e: ApiError) -> (StatusCode, Json<Value>) {
     let status = StatusCode::from_u16(e.http).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, Json(json!({ "ok": false, "error": { "code": e.code, "message": e.message } })))
+    (
+        status,
+        Json(json!({
+            "ok": false,
+            "error": { "code": e.code, "message": e.message, "details": e.details },
+        })),
+    )
+}
+
+// --- 에러 표준 envelope 미들웨어 (RV-55 §5.2) --------------------------------
+// axum 기본 extractor(Query/Json/Path) reject 는 평문/빈 본문 4xx 를 낸다.
+// 응답 후처리로 이를 정본 `{ok:false,error:{code,message,details}}` envelope 로 변환한다.
+// usecase 오류(err_response, application/json)는 이미 envelope 이므로 건드리지 않는다.
+// (커스텀 extractor trait impl 은 axum 0.7.9 시그니처 이슈로 회피 — 단일 지점 후처리)
+async fn envelope_errors_mw(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let resp = next.run(req).await;
+    let status = resp.status();
+    if !(status.is_client_error() || status.is_server_error()) {
+        return resp;
+    }
+    // 이미 JSON 응답(usecase envelope)이면 그대로 둔다.
+    let is_json = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("application/json"))
+        .unwrap_or(false);
+    if is_json {
+        return resp;
+    }
+    // 평문/빈 본문 오류 → envelope 변환. error.code 는 status 로 역추론.
+    let (parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes).trim().to_string();
+    let code = match status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => "invalid_request",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::METHOD_NOT_ALLOWED => "method_not_allowed",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        _ => "error",
+    };
+    let message = if text.is_empty() { "Request failed.".to_string() } else { text };
+    (
+        parts.status,
+        Json(json!({
+            "ok": false,
+            "error": { "code": code, "message": message, "details": {} },
+        })),
+    )
+        .into_response()
+}
+
+// --- META (DS-40, Python 정합) -----------------------------------------------
+
+const META_VERSION: &str = "0.1.0";
+
+async fn healthz(State(s): State<AppState>) -> (StatusCode, Json<Value>) {
+    let project_id = s.selected_project.clone().unwrap_or_else(|| "Panthea".to_string());
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "data": { "status": "ok", "version": META_VERSION, "project_id": project_id },
+        })),
+    )
+}
+
+async fn root_meta() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "data": { "service": "agiteamapp-webgui-backend", "docs": "/docs" },
+        })),
+    )
 }
 fn ok_201(data: Value) -> (StatusCode, Json<Value>) {
     (StatusCode::CREATED, Json(json!({ "ok": true, "data": data })))
@@ -155,7 +236,7 @@ async fn hook_collect(
 ) -> (StatusCode, Json<Value>) {
     let tr = s.transcript();
     match collect_hook(s.repo.as_ref(), s.hub.as_ref(), &tr, req).await {
-        Ok(r) => ok_201(serde_json::to_value(r).unwrap()),
+        Ok(r) => ok_201(r),
         Err(e) => err_response(e),
     }
 }
@@ -221,7 +302,7 @@ async fn message_send(
 // --- 조회 (GET) --------------------------------------------------------------
 
 async fn projects_list(State(s): State<AppState>) -> (StatusCode, Json<Value>) {
-    match list_projects(s.repo.as_ref(), s.discovery.as_ref(), s.selected_project.as_deref()).await {
+    match list_projects(s.repo.as_ref(), s.discovery.as_ref(), s.selected_project.as_deref(), &s.projects_base).await {
         Ok(data) => ok_200(data),
         Err(e) => err_response(e),
     }
@@ -282,7 +363,7 @@ async fn room_messages(
     Query(q): Query<MessagesQuery>,
 ) -> (StatusCode, Json<Value>) {
     let limit = q.limit.clamp(1, 200);
-    match list_room_messages(s.repo.as_ref(), s.activity.as_ref(), &room_id, limit, &q.direction, q.cursor)
+    match list_room_messages(s.repo.as_ref(), s.activity.as_ref(), s.discovery.as_ref(), &room_id, limit, &q.direction, q.cursor)
         .await
     {
         Ok(data) => ok_200(data),
@@ -426,6 +507,14 @@ async fn artifacts_changes(
     State(s): State<AppState>,
     Query(q): Query<ChangesQuery>,
 ) -> (StatusCode, Json<Value>) {
+    // WG-ART-04: watcher 비활성 환경에서는 Python 과 동일하게 503 (polling fallback 없음).
+    if !s.artifact_watcher_enabled {
+        return err_response(ApiError::new(
+            "artifact_watcher_unavailable",
+            503,
+            "Artifact watcher is not active.",
+        ));
+    }
     let limit = q.limit.clamp(1, 500);
     let (updates, next_cursor) = s.changes.changes_after(&q.project_id, q.after.as_deref(), limit);
     ok_200(json!({ "updates": updates, "next_cursor": next_cursor }))
@@ -636,6 +725,8 @@ async fn attachment_preview(
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", mime)
+                    // Python FileResponse 정합: Accept-Ranges: bytes (range 지원 표시).
+                    .header("Accept-Ranges", "bytes")
                     .header("Content-Security-Policy", "default-src 'none'")
                     .header("X-Content-Type-Options", "nosniff")
                     .body(axum::body::Body::from(bytes))
@@ -652,6 +743,8 @@ async fn attachment_preview(
 struct WsQuery {
     project_id: Option<String>,
     room_id: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
 }
 
 async fn message_stream(
@@ -689,12 +782,35 @@ async fn handle_ws(mut socket: WebSocket, s: AppState, q: WsQuery) {
     };
 
     let mut rx = s.hub.subscribe();
-    // accept 신호로 ready 한 줄 보냄(선택적; FE 는 무시 가능).
-    let _ = socket
-        .send(Message::Text(
-            json!({"type":"ready","project_id":project_id}).to_string(),
-        ))
-        .await;
+    // Python message-stream 은 accept 후 ready 프레임 없이 바로 replay/live 만 보낸다.
+    // QI-WG-030 gap replay: room 지정 + after cursor 면 연결 직후 그 cursor 이후 메시지를
+    // _message_update_payload(WS) 형식으로 먼저 흘려보낸다(Python messages.py 정합).
+    if let (Some(rid), Some(after)) = (q.room_id.as_ref(), q.after.as_ref()) {
+        let after_ts = match after.split_once("|message:") {
+            Some((ts, _)) => Some(ts.to_string()),
+            None => Some(after.clone()),
+        };
+        if let Ok(msgs) = s.repo.updates_since(rid, after_ts.as_deref(), 200).await {
+            for m in &msgs {
+                let payload = json!({
+                    "type": "message_update",
+                    "cursor": format!("{}|message:{}", m.recorded_at, m.message_id),
+                    "data": {
+                        "update_id": format!("message:{}", m.message_id),
+                        "room_id": m.room_id,
+                        "correlation_id": m.correlation_id,
+                        "update_type": message_update_type(&m.direction, &m.status),
+                        "message": message_to_dict(m, &project_id, Some("websocket")),
+                        "event": Value::Null,
+                        "occurred_at": m.occurred_at,
+                    },
+                });
+                if socket.send(Message::Text(payload.to_string())).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
 
     loop {
         tokio::select! {
@@ -756,6 +872,8 @@ async fn auth_mw(
 
 fn app(state: AppState) -> Router {
     Router::new()
+        .route("/healthz", get(healthz))
+        .route("/", get(root_meta))
         .route("/api/webgui/internal/hook/collect", post(hook_collect))
         .route("/api/webgui/internal/runtime-activity/collect", post(runtime_activity_collect))
         .route("/api/webgui/internal/rooms/:room_id/messages/collect", post(message_collect))
@@ -778,6 +896,8 @@ fn app(state: AppState) -> Router {
         .route("/api/webgui/message-attachments/:attachment_id/preview", get(attachment_preview))
         .route("/api/webgui/message-stream", get(message_stream))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth_mw))
+        // 에러 envelope 후처리는 가장 바깥 layer (auth_mw 의 평문 401 등도 변환 대상).
+        .layer(axum::middleware::from_fn(envelope_errors_mw))
         .with_state(state)
 }
 
@@ -896,14 +1016,23 @@ async fn main() {
     }
 
     // 산출물 변경 watcher (WG-ART-04): selected 프로젝트 documents 루트 감시 → 버퍼+WS publish.
+    // Python WEBGUI_ARTIFACT_WATCHER_ENABLED 대응. 미설정 기본 true(운영), equiv 는 false 로 끈다.
+    let artifact_watcher_enabled = std::env::var("AGITEAMAPP_ARTIFACT_WATCHER_ENABLED")
+        .map(|v| {
+            let v = v.to_lowercase();
+            v == "true" || v == "1" || v == "yes"
+        })
+        .unwrap_or(true);
     let changes = Arc::new(ArtifactChangeBuffer::new());
     let hub_for_watch = Arc::new(WsHub::new());
-    spawn_artifact_watcher(
-        changes.clone(),
-        hub_for_watch.clone(),
-        &projects_base,
-        selected_project.as_deref(),
-    );
+    if artifact_watcher_enabled {
+        spawn_artifact_watcher(
+            changes.clone(),
+            hub_for_watch.clone(),
+            &projects_base,
+            selected_project.as_deref(),
+        );
+    }
 
     let state = AppState {
         repo: Arc::new(repo),
@@ -916,6 +1045,7 @@ async fn main() {
         projects_base,
         api_token: std::env::var("AGITEAMAPP_API_TOKEN").ok().filter(|s| !s.is_empty()),
         collector_token: std::env::var("AGITEAMAPP_COLLECTOR_TOKEN").ok().filter(|s| !s.is_empty()),
+        artifact_watcher_enabled,
     };
 
     let port: u16 = std::env::var("AGITEAMAPP_RS_PORT")

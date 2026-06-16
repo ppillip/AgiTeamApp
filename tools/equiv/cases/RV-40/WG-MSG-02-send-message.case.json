@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-MSG-02-happy-fake-mux",
+  "contract_id": "WG-MSG-02",
+  "title": "WebGUI 메시지를 fake mux로 송신하고 outbound message 저장",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/messages",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {},
+    "body": { "project_id": "Panthea", "text": "RV40 parity ping", "client_message_id": "rv40-client-msg-001", "attachments": [] }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "mux_mock": "scripts/equiv/fake_cmux.py", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["mux[]", "db.webgui_message[]"]
+}

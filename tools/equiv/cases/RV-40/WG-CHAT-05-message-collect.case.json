@@ -1,0 +1,30 @@
+{
+  "case_id": "WG-CHAT-05-happy-collect",
+  "contract_id": "WG-CHAT-05",
+  "title": "room 지정 message collect와 dedupe snapshot",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/internal/rooms/00000000-0000-4000-8000-000000000101/messages/collect",
+    "headers": { "authorization": "Bearer <fixture-collector-token>" },
+    "query": {},
+    "body": {
+      "agent_session_id": "00000000-0000-4000-8000-000000000201",
+      "role_id": "QA",
+      "surface_id": "surface:equiv-qa",
+      "source": "transcript",
+      "message_type": "assistant_message",
+      "provider": "claude_code",
+      "transcript_path": "fixtures/transcripts/rv40-stop.jsonl",
+      "transcript_offset": "2",
+      "transcript_record_id": "rv40-transcript-001",
+      "raw_text": "RV40 collected assistant message",
+      "normalized_text": "RV40 collected assistant message",
+      "raw_hash": "sha256:rv40-collect-001",
+      "correlation_id": "00000000-0000-4000-8000-000000000501",
+      "occurred_at": "2026-06-16T09:02:30+00:00"
+    }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["db.webgui_message[]", "ws_events[]"]
+}

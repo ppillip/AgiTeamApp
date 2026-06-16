@@ -177,6 +177,7 @@ fn uuid_v4_string() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static CTR: AtomicU64 = AtomicU64::new(0);
     let n = CTR.fetch_add(1, Ordering::Relaxed);
-    // 휘발성 합성 식별자 (DB 저장 안 됨). 형식만 식별 가능하게.
-    format!("act-{n:016x}")
+    // 휘발성 합성 식별자 (DB 저장 안 됨). Python uuid4 정합 위해 UUID 형식으로
+    // (parity normalizer 가 <UUID#n> 로 흡수). act- prefix 는 정규화 미매칭 → strict FAIL 유발했음.
+    format!("00000000-0000-4000-8000-{n:012x}")
 }

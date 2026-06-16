@@ -1,0 +1,59 @@
+{
+  "case_id": "WG-ART-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "669"
+    },
+    "body": {
+      "data": {
+        "node": {
+          "children": [
+            {
+              "extension": null,
+              "has_children": true,
+              "mime_type": null,
+              "name": "patent",
+              "node_type": "directory",
+              "path": "patent",
+              "renderable": false,
+              "size_bytes": null
+            },
+            {
+              "extension": null,
+              "has_children": true,
+              "mime_type": null,
+              "name": "products",
+              "node_type": "directory",
+              "path": "products",
+              "renderable": false,
+              "size_bytes": null
+            },
+            {
+              "extension": null,
+              "has_children": true,
+              "mime_type": null,
+              "name": "reports",
+              "node_type": "directory",
+              "path": "reports",
+              "renderable": false,
+              "size_bytes": null
+            }
+          ],
+          "extension": null,
+          "has_children": true,
+          "mime_type": null,
+          "name": "documents",
+          "node_type": "directory",
+          "path": "",
+          "renderable": false,
+          "size_bytes": null
+        },
+        "path": "",
+        "root": "documents/"
+      },
+      "ok": true
+    }
+  }
+}

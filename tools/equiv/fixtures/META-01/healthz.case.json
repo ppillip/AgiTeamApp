@@ -1,0 +1,15 @@
+{
+  "case_id": "META-01-happy",
+  "contract_id": "META-01",
+  "title": "GET /healthz 가 서버 상태와 프로젝트 식별 정보를 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/healthz",
+    "headers": {},
+    "query": {},
+    "body": null
+  },
+  "seed": {},
+  "array_sort_paths": []
+}

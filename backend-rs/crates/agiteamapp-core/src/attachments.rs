@@ -10,7 +10,16 @@ use serde_json::{json, Value};
 use crate::repo::ApiError;
 
 fn aerr(code: &'static str, http: u16) -> ApiError {
-    ApiError::new(code, http, "attachment error")
+    // Python AttachmentError → WebguiError 문구 정합 (사용자 표시 문장).
+    let msg = match code {
+        "attachment_storage_unavailable" => "Attachment storage is unavailable.",
+        "attachment_too_large" => "Attachment is too large.",
+        "unsupported_image_type" => "Unsupported image type.",
+        "invalid_image" => "Invalid image.",
+        "attachment_not_found" => "Attachment not found.",
+        _ => "attachment error",
+    };
+    ApiError::new(code, http, msg)
 }
 
 /// epoch 초 → ISO-8601 UTC ("2026-06-16T07:00:00Z"). chrono 무의존 (civil-from-days).
@@ -30,6 +39,27 @@ pub fn epoch_to_iso(epoch: i64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1,12]
     let year = if m <= 2 { y + 1 } else { y };
     format!("{year:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+}
+
+/// ISO-8601("YYYY-MM-DDTHH:MM:SS…") → epoch 초 (Howard Hinnant days_from_civil 역산).
+/// timezone offset 은 무시(UTC 가정 — TTL 비교용 근사). 파싱 실패 시 None.
+fn iso_to_epoch(s: &str) -> Option<i64> {
+    if s.len() < 19 {
+        return None;
+    }
+    let y: i64 = s.get(0..4)?.parse().ok()?;
+    let mo: i64 = s.get(5..7)?.parse().ok()?;
+    let d: i64 = s.get(8..10)?.parse().ok()?;
+    let h: i64 = s.get(11..13)?.parse().ok()?;
+    let mi: i64 = s.get(14..16)?.parse().ok()?;
+    let se: i64 = s.get(17..19)?.parse().ok()?;
+    let yy = if mo <= 2 { y - 1 } else { y };
+    let era = (if yy >= 0 { yy } else { yy - 399 }) / 400;
+    let yoe = yy - era * 400;
+    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + se)
 }
 
 #[derive(Debug, Clone)]
@@ -193,7 +223,7 @@ impl AttachmentService {
         let filename = format!("{prefix}-{now_epoch}-{}.{}", &sha_hex[..8.min(sha_hex.len())], info.fmt);
         let expires_at = now_epoch + ttl_seconds;
 
-        fs::create_dir_all(&self.store_dir).map_err(|_| aerr("attachment_storage_unavailable", 500))?;
+        fs::create_dir_all(&self.store_dir).map_err(|_| aerr("attachment_storage_unavailable", 503))?;
         let abs_path = self.store_dir.join(&filename);
         let meta = json!({
             "attachment_id": attachment_id,
@@ -209,9 +239,9 @@ impl AttachmentService {
             "created_at": now_epoch,
             "expires_at": expires_at,
         });
-        fs::write(&abs_path, data).map_err(|_| aerr("attachment_storage_unavailable", 500))?;
+        fs::write(&abs_path, data).map_err(|_| aerr("attachment_storage_unavailable", 503))?;
         fs::write(self.store_dir.join(format!("{attachment_id}.json")), serde_json::to_vec(&meta).unwrap())
-            .map_err(|_| aerr("attachment_storage_unavailable", 500))?;
+            .map_err(|_| aerr("attachment_storage_unavailable", 503))?;
         Ok(self.public_dict(&meta))
     }
 
@@ -236,7 +266,12 @@ impl AttachmentService {
         if meta["project_id"].as_str() != Some(project_id) {
             return Err(aerr("attachment_not_found", 404));
         }
-        let expires = meta["expires_at"].as_i64().unwrap_or(0);
+        // expires_at: epoch(i64) 또는 Python sidecar 의 ISO-8601 string 둘 다 해석.
+        // (Python attachment_service 는 ISO 로 저장 → as_i64 만 보면 0 으로 오인해 false 만료)
+        let expires = meta["expires_at"]
+            .as_i64()
+            .or_else(|| meta["expires_at"].as_str().and_then(iso_to_epoch))
+            .unwrap_or(0);
         if expires <= now_epoch {
             return Err(aerr("attachment_expired", 410));
         }

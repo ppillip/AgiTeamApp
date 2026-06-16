@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-ART-01-happy",
+  "contract_id": "WG-ART-01",
+  "title": "artifact tree root/path/depth 조회",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/artifacts/tree",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": { "project_id": "Panthea", "root_type": "documents", "path": "", "depth": 2, "recursive": false, "include_files": true },
+    "body": null
+  },
+  "seed": { "fs_tree": "fixtures/fs/artifacts" },
+  "array_sort_paths": ["http.body.data.children[]"]
+}

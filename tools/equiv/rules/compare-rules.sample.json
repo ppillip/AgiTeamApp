@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "doc": "RV-30 compare-rules 샘플 — META-01/WG-PROJ-01",
+    "ssot": "documents/products/AgiTeamApp/04.development/04.테스트/TS-11_기능목록 §3 필드3분류, §5 DB snapshot",
+    "note": "이 파일은 아르고스(QA) 교차검토 대상이다. 무엇을 strict/normalize/exclude로 보는지를 코드가 아니라 데이터로 명시한다.",
+    "forbidden_keys": ["role_id", "raw_text", "raw_payload", "raw_stdin", "hook_stdin", "payload_json"]
+  },
+  "common": {
+    "fields": {
+      "http.headers.date": "exclude",
+      "http.headers.server": "exclude",
+      "http.headers.connection": "exclude",
+      "http.headers.transfer-encoding": "exclude",
+      "http.headers.content-type": "strict",
+      "**.created_at": "normalize",
+      "**.updated_at": "normalize",
+      "**.server_time": "normalize",
+      "**.recorded_at": "normalize",
+      "**.occurred_at": "normalize"
+    }
+  },
+  "contracts": {
+    "META-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.ok": "strict",
+        "http.body.data.status": "strict",
+        "http.body.data.project_id": "strict",
+        "http.body.data.version": "strict"
+      }
+    },
+    "WG-PROJ-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.ok": "strict",
+        "http.body.data.selected_project_id": "strict",
+        "http.body.data.projects[].project_id": "strict",
+        "http.body.data.projects[].workspace_title": "strict",
+        "http.body.data.projects[].connection_state": "strict",
+        "http.body.data.projects[].pm_connection_state": "strict",
+        "http.body.data.projects[].room_count": "strict",
+        "http.body.data.projects[].selected": "strict",
+        "http.body.data.projects[].roles": "strict",
+        "http.body.data.projects[].workspace_id": "normalize",
+        "http.body.data.projects[].root_path": "normalize",
+        "http.body.data.projects[].last_discovered_at": "normalize"
+      },
+      "db_snapshot": {
+        "webgui_room": {
+          "sort_keys": ["project_id", "role_id"],
+          "strict": ["display_name", "agent_type", "room_type", "ready_state", "unread_count"],
+          "normalize": ["room_id", "last_message_at", "updated_at"]
+        }
+      }
+    }
+  }
+}

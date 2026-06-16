@@ -1,0 +1,16 @@
+{
+  "case_id": "WG-MSG-06.7-preview",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-security-policy": "default-src 'none'",
+      "x-content-type-options": "nosniff",
+      "content-type": "image/png",
+      "accept-ranges": "bytes",
+      "content-length": "68"
+    },
+    "body": {
+      "_nonjson_len": 68
+    }
+  }
+}

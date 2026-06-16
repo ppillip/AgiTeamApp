@@ -1,0 +1,33 @@
+{
+  "case_id": "WG-PROJ-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "314"
+    },
+    "body": {
+      "data": {
+        "projects": [
+          {
+            "connection_state": "connected",
+            "last_discovered_at": null,
+            "pm_connection_state": "connected",
+            "project_id": "Panthea",
+            "roles": [
+              "PM",
+              "DevOps"
+            ],
+            "room_count": 2,
+            "root_path": null,
+            "selected": true,
+            "workspace_id": "workspace:equiv",
+            "workspace_title": "Panthea"
+          }
+        ],
+        "selected_project_id": "Panthea"
+      },
+      "ok": true
+    }
+  }
+}

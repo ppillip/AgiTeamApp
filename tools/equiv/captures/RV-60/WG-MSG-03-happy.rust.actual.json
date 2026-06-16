@@ -1,0 +1,67 @@
+{
+  "case_id": "WG-MSG-03-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "1389"
+    },
+    "body": {
+      "data": {
+        "message": {
+          "agent_session_id": "00000000-0000-4000-8000-000000000201",
+          "attachments": [
+            {
+              "attachment_id": "att_0000000000004000800000000000601",
+              "expires_at": "2026-06-17T09:00:00Z",
+              "filename": "upload-20260616T090000Z-rv60.png",
+              "height": 1,
+              "kind": "image",
+              "mime_type": "image/png",
+              "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+              "sha256": "seed-rv60-preview",
+              "size_bytes": 67,
+              "width": 1
+            }
+          ],
+          "correlation_id": "00000000-0000-4000-8000-000000000501",
+          "direction": "inbound",
+          "message_id": "00000000-0000-4000-8000-000000000302",
+          "message_type": "assistant_message",
+          "occurred_at": "2026-06-16T09:01:00+00:00",
+          "project_id": "Panthea",
+          "provenance": {
+            "is_mock": false,
+            "is_real_data": true,
+            "origin": "transcript",
+            "runtime_state": "live"
+          },
+          "recorded_at": "2026-06-16T09:01:00+00:00",
+          "role": "QA",
+          "room_id": "00000000-0000-4000-8000-000000000101",
+          "source": "transcript",
+          "status": "received",
+          "surface_id": "surface:equiv-qa",
+          "team_session_id": "rv60-team-session",
+          "text": "RV60 seeded assistant reply",
+          "updated_at": "2026-06-16T09:01:01+00:00"
+        },
+        "related_updates": [
+          {
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "event": {
+              "event_type": "hook_stop",
+              "severity": "info"
+            },
+            "message": null,
+            "occurred_at": "2026-06-16T09:01:30+00:00",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "update_id": "event:00000000-0000-4000-8000-000000000401",
+            "update_type": "correlation_closed"
+          }
+        ]
+      },
+      "ok": true
+    }
+  }
+}

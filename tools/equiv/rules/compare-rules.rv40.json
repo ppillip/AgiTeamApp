@@ -1,0 +1,315 @@
+{
+  "meta": {
+    "doc": "RV-40 compare-rules — AgiTeamApp backend parity 전체 계약 초안",
+    "ssot": "documents/products/AgiTeamApp/04.development/04.테스트/TS-11_기능목록/백엔드_parity_기능목록_v0.1.md",
+    "note": "계약별 strict/normalize/exclude 정책. RV-60 전수 실행 전 case별 응답 스키마에 맞춰 보강한다.",
+    "forbidden_keys": ["role_id", "raw_text", "raw_payload", "raw_stdin", "hook_stdin", "payload_json", "absolute_path"]
+  },
+  "common": {
+    "fields": {
+      "http.headers.date": "exclude",
+      "http.headers.server": "exclude",
+      "http.headers.connection": "exclude",
+      "http.headers.transfer-encoding": "exclude",
+      "http.headers.content-type": "strict",
+      "http.headers.content-length": "exclude",
+      "http.headers.accept-ranges": "strict",
+      "http.headers.content-range": "strict",
+      "http.headers.content-security-policy": "strict",
+      "http.headers.x-content-type-options": "strict",
+      "**.ok": "strict",
+      "**.error.code": "strict",
+      "**.error.message": "normalize",
+      "**.details": "normalize",
+      "**.id": "normalize",
+      "**.*_id": "normalize",
+      "**.*_at": "normalize",
+      "**.server_time": "normalize",
+      "**.cursor": "normalize",
+      "**.next_cursor": "normalize",
+      "**.created_at": "normalize",
+      "**.updated_at": "normalize",
+      "**.recorded_at": "normalize",
+      "**.occurred_at": "normalize",
+      "**.last_active_at": "normalize",
+      "**.root_path": "normalize",
+      "**.transcript_path": "exclude",
+      "**.transcript_offset": "exclude",
+      "**.raw_text": "exclude",
+      "**.raw_payload": "exclude",
+      "**.payload_json": "exclude"
+    }
+  },
+  "contracts": {
+    "META-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.status": "strict",
+        "http.body.data.project_id": "strict",
+        "http.body.data.version": "strict"
+      }
+    },
+    "META-02": {
+      "fields": {
+        "http.status": "strict",
+        "http.body": "normalize"
+      }
+    },
+    "WG-PROJ-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.selected_project_id": "strict",
+        "http.body.data.projects[].project_id": "strict",
+        "http.body.data.projects[].workspace_title": "strict",
+        "http.body.data.projects[].connection_state": "strict",
+        "http.body.data.projects[].pm_connection_state": "strict",
+        "http.body.data.projects[].room_count": "strict",
+        "http.body.data.projects[].selected": "strict",
+        "http.body.data.projects[].roles": "strict",
+        "http.body.data.projects[].workspace_id": "normalize",
+        "http.body.data.projects[].root_path": "normalize",
+        "http.body.data.projects[].last_discovered_at": "normalize"
+      },
+      "db_snapshot": {
+        "webgui_room": {
+          "sort_keys": ["project_id", "role_id"],
+          "strict": ["display_name", "agent_type", "room_type", "ready_state", "unread_count"],
+          "normalize": ["room_id", "last_message_at", "updated_at"]
+        }
+      }
+    },
+    "WG-MSG-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.project_id": "strict",
+        "http.body.data.rooms[].role": "strict",
+        "http.body.data.rooms[].runtime_activity": "strict",
+        "http.body.data.rooms[].connection_state": "strict",
+        "http.body.data.server_time": "normalize"
+      }
+    },
+    "WG-MSG-02": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.message.text": "strict",
+        "http.body.data.message.direction": "strict",
+        "http.body.data.message.source": "strict",
+        "http.body.data.message.status": "strict",
+        "http.body.data.ack.status": "strict",
+        "mux[].argv": "strict",
+        "mux[].stdin": "strict",
+        "mux[].env": "normalize"
+      },
+      "db_snapshot": {
+        "webgui_message": {
+          "sort_keys": ["room_key", "direction", "source", "message_type", "normalized_text"],
+          "strict": ["direction", "source", "message_type", "status", "normalized_text", "attachments_json", "team_session_id", "provider"],
+          "normalize": ["message_id", "agent_session_id", "correlation_id", "occurred_at", "recorded_at", "updated_at"]
+        }
+      }
+    },
+    "WG-MSG-03": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.message": "strict",
+        "http.body.data.related_updates[]": "strict"
+      }
+    },
+    "WG-MSG-04": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.updates[]": "strict",
+        "http.body.data.next_cursor": "normalize"
+      }
+    },
+    "WG-MSG-05": {
+      "fields": {
+        "ws_events[].type": "strict",
+        "ws_events[].project_id": "strict",
+        "ws_events[].room_id": "normalize",
+        "ws_events[].cursor": "normalize",
+        "ws_events[].payload": "strict",
+        "ws_events[].close_code": "strict"
+      }
+    },
+    "WG-MSG-06": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.attachment.mime_type": "strict",
+        "http.body.data.attachment.size_bytes": "strict",
+        "http.body.data.attachment.preview_url": "strict",
+        "http.body.data.attachment.attachment_id": "normalize",
+        "http.body.data.attachment.storage_path": "exclude"
+      },
+      "db_snapshot": {
+        "webgui_message": {
+          "sort_keys": ["room_key", "normalized_text"],
+          "strict": ["attachments_json"],
+          "normalize": ["message_id", "updated_at"]
+        }
+      }
+    },
+    "WG-MSG-06.7": {
+      "fields": {
+        "http.status": "strict",
+        "http.headers.content-type": "strict",
+        "http.headers.content-security-policy": "strict",
+        "http.headers.x-content-type-options": "strict",
+        "http.body_b64": "strict"
+      }
+    },
+    "WG-CHAT-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.project_id": "strict",
+        "http.body.data.rooms[].role": "strict",
+        "http.body.data.rooms[].display_name": "strict",
+        "http.body.data.rooms[].unread_count": "strict",
+        "http.body.data.rooms[].last_message": "strict",
+        "http.body.data.rooms[].updated_at": "normalize"
+      }
+    },
+    "WG-CHAT-02": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.room.role": "strict",
+        "http.body.data.messages[]": "strict",
+        "http.body.data.page.next_cursor": "normalize"
+      }
+    },
+    "WG-CHAT-03": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.room_id": "normalize",
+        "http.body.data.unread_count": "strict",
+        "http.body.data.read_marker_at": "normalize",
+        "http.body.data.updated_at": "normalize"
+      },
+      "db_snapshot": {
+        "webgui_room": {
+          "sort_keys": ["project_id", "role_id"],
+          "strict": ["unread_count"],
+          "normalize": ["read_marker_at", "updated_at"]
+        }
+      }
+    },
+    "WG-CHAT-04": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.events[]": "strict",
+        "http.body.data.page.next_cursor": "normalize"
+      }
+    },
+    "WG-CHAT-05": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.message": "strict",
+        "http.body.data.deduplicated": "strict"
+      },
+      "db_snapshot": {
+        "webgui_message": {
+          "sort_keys": ["room_key", "source", "message_type", "transcript_record_id", "normalized_text"],
+          "strict": ["direction", "source", "message_type", "status", "normalized_text", "attachments_json", "team_session_id", "provider", "transcript_record_id"],
+          "normalize": ["message_id", "agent_session_id", "correlation_id", "occurred_at", "recorded_at", "updated_at"]
+        }
+      }
+    },
+    "WG-CHAT-06": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.event.event_type": "strict",
+        "http.body.data.event.source": "strict",
+        "http.body.data.event.severity": "strict",
+        "http.body.data.event.payload": "strict"
+      },
+      "db_snapshot": {
+        "webgui_runtime_event": {
+          "sort_keys": ["room_key", "event_type", "source", "hook_event_name"],
+          "strict": ["event_type", "source", "severity", "hook_provider", "hook_event_name", "masked_payload_json"],
+          "normalize": ["event_id", "agent_session_id", "message_id", "correlation_id", "occurred_at", "recorded_at"]
+        }
+      }
+    },
+    "WG-HOOK-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.event.event_type": "strict",
+        "http.body.data.event.source": "strict",
+        "http.body.data.transcript_collect": "strict"
+      },
+      "db_snapshot": {
+        "webgui_room": {
+          "sort_keys": ["project_id", "role_id"],
+          "strict": ["team_session_id", "agent_id", "display_name", "agent_type", "room_type", "ready_state"],
+          "normalize": ["room_id", "updated_at"]
+        },
+        "webgui_message": {
+          "sort_keys": ["room_key", "source", "transcript_record_id", "normalized_text"],
+          "strict": ["direction", "source", "message_type", "status", "normalized_text", "provider", "transcript_record_id"],
+          "normalize": ["message_id", "occurred_at", "recorded_at", "updated_at"]
+        },
+        "webgui_runtime_event": {
+          "sort_keys": ["room_key", "event_type", "hook_event_name"],
+          "strict": ["event_type", "source", "severity", "hook_provider", "hook_event_name", "masked_payload_json"],
+          "normalize": ["event_id", "occurred_at", "recorded_at"]
+        }
+      }
+    },
+    "WG-ACT-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.accepted": "strict",
+        "http.body.data.project_id": "strict",
+        "http.body.data.role": "strict",
+        "http.body.data.runtime_activity": "strict",
+        "ws_events[]": "strict"
+      },
+      "db_snapshot": {
+        "webgui_message": { "sort_keys": ["room_key"], "strict": [] },
+        "webgui_runtime_event": { "sort_keys": ["room_key"], "strict": [] }
+      }
+    },
+    "WG-ART-04": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.updates[]": "strict",
+        "http.body.data.next_cursor": "normalize"
+      }
+    },
+    "WG-ART-01": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data": "strict"
+      }
+    },
+    "WG-ART-05": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.saved": "strict",
+        "http.body.data.path": "strict",
+        "ws_events[]": "strict"
+      }
+    },
+    "WG-ART-02": {
+      "fields": {
+        "http.status": "strict",
+        "http.body.data.file.path": "strict",
+        "http.body.data.file.content": "strict",
+        "http.body.data.file.render_mode": "strict",
+        "http.body.data.file.mime_type": "strict",
+        "http.body.data.file.language_hint": "strict",
+        "http.body.data.file.stream_url": "strict"
+      }
+    },
+    "WG-ART-03": {
+      "fields": {
+        "http.status": "strict",
+        "http.headers.content-type": "strict",
+        "http.headers.content-range": "strict",
+        "http.headers.content-security-policy": "strict",
+        "http.headers.x-content-type-options": "strict",
+        "http.body_b64": "strict"
+      }
+    }
+  }
+}

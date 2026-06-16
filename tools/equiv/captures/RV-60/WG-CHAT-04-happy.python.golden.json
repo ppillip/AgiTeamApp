@@ -1,0 +1,39 @@
+{
+  "case_id": "WG-CHAT-04-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-length": "576",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "events": [
+          {
+            "event_id": "00000000-0000-4000-8000-000000000401",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "message_id": "00000000-0000-4000-8000-000000000302",
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "event_type": "hook_stop",
+            "source": "hook",
+            "hook_provider": "claude_code",
+            "hook_event_name": "Stop",
+            "severity": "info",
+            "payload": {
+              "agent_id": "rv60-qa-agent",
+              "session_id": "rv60-session",
+              "transcript_path": "fixtures/transcripts/rv40-stop.jsonl"
+            },
+            "occurred_at": "2026-06-16T09:01:30+00:00"
+          }
+        ],
+        "page": {
+          "limit": 20,
+          "next_cursor": null,
+          "has_more": false
+        }
+      }
+    }
+  }
+}

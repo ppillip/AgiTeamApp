@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-ART-04-happy",
+  "contract_id": "WG-ART-04",
+  "title": "artifact change polling fallback 결과 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/artifacts/changes",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": { "project_id": "Panthea", "limit": 20 },
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "fs_tree": "fixtures/fs/artifacts" },
+  "array_sort_paths": []
+}

@@ -237,11 +237,17 @@ impl DiscoveryRegistry {
                 "connection_state": if connected { "connected" } else { "disconnected" },
                 "pm_connection_state": pm.map(|p| p.connection_state.as_str()).unwrap_or("absent"),
                 "room_count": roles.len(),
+                // FE(adapters.js)가 roles 를 객체배열로 소비(display_name·connection_state·monogram).
+                // Python oracle 형태와 동일하게 노출(RV-55 string[] 판정은 오류였음, 9차 정정).
                 "roles": roles.iter().map(|r| json!({
                     "role": r.role_id,
                     "display_name": r.display_name,
                     "surface_id": r.surface_id,
                     "connection_state": r.connection_state,
+                    "last_seen_at": crate::attachments::epoch_to_iso(r.last_seen_epoch),
+                    "team_session_id": Value::Null,
+                    "agent_id": Value::Null,
+                    "agent_type": Value::Null,
                 })).collect::<Vec<_>>(),
             }));
         }

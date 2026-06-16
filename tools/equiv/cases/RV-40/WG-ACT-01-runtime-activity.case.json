@@ -1,0 +1,28 @@
+{
+  "case_id": "WG-ACT-01-active-pulse",
+  "contract_id": "WG-ACT-01",
+  "title": "runtime activity pulse는 registry/WS만 갱신하고 DB write 없음",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/internal/runtime-activity/collect",
+    "headers": { "authorization": "Bearer <fixture-collector-token>" },
+    "query": {},
+    "body": {
+      "project_id": "Panthea",
+      "team_session_id": "rv60-team-session",
+      "role": "QA",
+      "display_name": "아르고스",
+      "surface_id": "surface:equiv-qa",
+      "activity": "active",
+      "reason": "read_screen_changed",
+      "snapshot_hash": "sha256:rv60-activity-001",
+      "snapshot_bytes": 128,
+      "poll_interval_ms": 1000,
+      "observed_at": "2026-06-16T09:02:00+00:00",
+      "schema_version": 1
+    }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["ws_events[]", "db.webgui_message[]", "db.webgui_runtime_event[]"]
+}

@@ -1,0 +1,87 @@
+{
+  "case_id": "WG-CHAT-06-happy-collect",
+  "http": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "540"
+    },
+    "body": {
+      "data": {
+        "event": {
+          "correlation_id": "00000000-0000-4000-8000-000000000501",
+          "event_id": "873dde71-221a-4833-b981-9619629dbcca",
+          "event_type": "hook_stop",
+          "hook_event_name": "Stop",
+          "hook_provider": "claude_code",
+          "message_id": "00000000-0000-4000-8000-000000000302",
+          "occurred_at": "2026-06-16T09:03:00+00:00",
+          "payload": {
+            "agent_id": "rv60-qa-agent",
+            "session_id": "rv60-session",
+            "token": "***MASKED***",
+            "transcript_path": "fixtures/transcripts/rv40-stop.jsonl"
+          },
+          "room_id": "00000000-0000-4000-8000-000000000101",
+          "severity": "info",
+          "source": "hook"
+        }
+      },
+      "ok": true
+    }
+  },
+  "db": {
+    "webgui_runtime_event": [
+      {
+        "source": "hook",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "event_id": "873dde71-221a-4833-b981-9619629dbcca",
+        "severity": "info",
+        "event_type": "hook_stop",
+        "message_id": "00000000-0000-4000-8000-000000000302",
+        "occurred_at": "2026-06-16T09:03:00+00:00",
+        "recorded_at": "2026-06-16T06:25:10.366161+00:00",
+        "payload_json": {
+          "token": "***MASKED***",
+          "agent_id": "rv60-qa-agent",
+          "session_id": "rv60-session",
+          "transcript_path": "fixtures/transcripts/rv40-stop.jsonl"
+        },
+        "hook_provider": "claude_code",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "hook_event_name": "Stop",
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "masked_payload_json": {
+          "token": "***MASKED***",
+          "agent_id": "rv60-qa-agent",
+          "session_id": "rv60-session",
+          "transcript_path": "fixtures/transcripts/rv40-stop.jsonl"
+        }
+      },
+      {
+        "source": "hook",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "event_id": "00000000-0000-4000-8000-000000000401",
+        "severity": "info",
+        "event_type": "hook_stop",
+        "message_id": "00000000-0000-4000-8000-000000000302",
+        "occurred_at": "2026-06-16T09:01:30+00:00",
+        "recorded_at": "2026-06-16T09:01:30+00:00",
+        "payload_json": {
+          "agent_id": "rv60-qa-agent",
+          "session_id": "rv60-session",
+          "transcript_path": "fixtures/transcripts/rv40-stop.jsonl"
+        },
+        "hook_provider": "claude_code",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "hook_event_name": "Stop",
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "masked_payload_json": {
+          "agent_id": "rv60-qa-agent",
+          "session_id": "rv60-session",
+          "transcript_path": "fixtures/transcripts/rv40-stop.jsonl"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "case_id": "WG-MSG-06-happy-png",
+  "http": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "125"
+    },
+    "body": {
+      "error": {
+        "code": "invalid_request",
+        "details": {},
+        "message": "Invalid `boundary` for `multipart/form-data` request"
+      },
+      "ok": false
+    }
+  }
+}

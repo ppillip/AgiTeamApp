@@ -1,0 +1,20 @@
+{
+  "case_id": "META-01-happy",
+  "backend": "rust",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "date": "Mon, 16 Jun 2026 11:02:10 GMT",
+      "server": "axum"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "status": "degraded",
+        "version": "0.2.0",
+        "project_id": "Panthea"
+      }
+    }
+  }
+}

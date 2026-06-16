@@ -1,0 +1,18 @@
+{
+  "case_id": "WG-ART-05-happy-md",
+  "http": {
+    "status": 500,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "104"
+    },
+    "body": {
+      "error": {
+        "code": "artifact_write_failed",
+        "details": {},
+        "message": "Failed to write artifact."
+      },
+      "ok": false
+    }
+  }
+}

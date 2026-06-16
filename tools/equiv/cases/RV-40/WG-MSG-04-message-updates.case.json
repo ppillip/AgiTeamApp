@@ -1,0 +1,20 @@
+{
+  "case_id": "WG-MSG-04-happy",
+  "contract_id": "WG-MSG-04",
+  "title": "after cursor 이후 message update polling",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/message-updates",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {
+      "project_id": "Panthea",
+      "room_id": "00000000-0000-4000-8000-000000000101",
+      "after": "2026-06-16T08:59:00+00:00|message:00000000-0000-4000-8000-000000000301",
+      "limit": 20
+    },
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql" },
+  "array_sort_paths": []
+}

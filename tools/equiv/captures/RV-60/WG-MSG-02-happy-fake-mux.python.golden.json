@@ -1,0 +1,250 @@
+{
+  "case_id": "WG-MSG-02-happy-fake-mux",
+  "http": {
+    "status": 201,
+    "headers": {
+      "content-length": "1291",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "ack": {
+          "accepted": true,
+          "send_submitted": true,
+          "message_id": "d9606b71-d1d1-470d-a480-0bab19dc3d56",
+          "correlation_id": "198c4145-eb3f-47fe-9e26-32f1af935f8b",
+          "project_id": "Panthea",
+          "room_id": "00000000-0000-4000-8000-000000000100",
+          "role": "PM",
+          "surface_id": "surface:equiv-pm",
+          "workspace_id": "workspace:equiv",
+          "agent_session_id": null,
+          "status": "sent",
+          "provenance": {
+            "origin": "pm_bridge",
+            "runtime_state": "live",
+            "is_real_data": true,
+            "is_mock": false,
+            "transport": "rest"
+          },
+          "client_message_id": "rv40-client-msg-001",
+          "submitted_at": "2026-06-16T10:10:33.014754Z"
+        },
+        "message": {
+          "message_id": "d9606b71-d1d1-470d-a480-0bab19dc3d56",
+          "project_id": "Panthea",
+          "room_id": "00000000-0000-4000-8000-000000000100",
+          "correlation_id": "198c4145-eb3f-47fe-9e26-32f1af935f8b",
+          "role": "PM",
+          "surface_id": "surface:equiv-pm",
+          "agent_session_id": null,
+          "team_session_id": "rv60-team-session",
+          "direction": "outbound",
+          "source": "webgui",
+          "message_type": "user_message",
+          "text": "RV40 parity ping",
+          "attachments": [],
+          "status": "sent",
+          "provenance": {
+            "origin": "webgui",
+            "runtime_state": "live",
+            "is_real_data": true,
+            "is_mock": false,
+            "transport": "rest"
+          },
+          "occurred_at": "2026-06-16T10:10:32.919824+00:00",
+          "recorded_at": "2026-06-16T10:10:32.919397+00:00",
+          "updated_at": "2026-06-16T10:10:33.014838+00:00",
+          "client_message_id": "rv40-client-msg-001"
+        }
+      }
+    }
+  },
+  "db": {
+    "webgui_message": [
+      {
+        "source": "webgui",
+        "status": "sent",
+        "role_id": "QA",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "provider": null,
+        "raw_hash": "seed:rv60:user:001",
+        "raw_text": "RV60 seeded user prompt",
+        "direction": "outbound",
+        "message_id": "00000000-0000-4000-8000-000000000301",
+        "surface_id": "surface:equiv-qa",
+        "updated_at": "2026-06-16T09:00:01+00:00",
+        "occurred_at": "2026-06-16T09:00:00+00:00",
+        "recorded_at": "2026-06-16T09:00:00+00:00",
+        "message_type": "user_message",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "normalized_text": "RV60 seeded user prompt",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": null,
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "attachments_json": null,
+        "transcript_offset": null,
+        "transcript_record_id": null
+      },
+      {
+        "source": "transcript",
+        "status": "received",
+        "role_id": "QA",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "provider": "claude_code",
+        "raw_hash": "seed:rv60:assistant:001",
+        "raw_text": "RV60 seeded assistant reply",
+        "direction": "inbound",
+        "message_id": "00000000-0000-4000-8000-000000000302",
+        "surface_id": "surface:equiv-qa",
+        "updated_at": "2026-06-16T09:01:01+00:00",
+        "occurred_at": "2026-06-16T09:01:00+00:00",
+        "recorded_at": "2026-06-16T09:01:00+00:00",
+        "message_type": "assistant_message",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "normalized_text": "RV60 seeded assistant reply",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": "fixtures/transcripts/rv40-stop.jsonl",
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "attachments_json": [
+          {
+            "kind": "image",
+            "width": 1,
+            "height": 1,
+            "sha256": "seed-rv60-preview",
+            "filename": "upload-20260616T090000Z-rv60.png",
+            "mime_type": "image/png",
+            "expires_at": "2026-06-17T09:00:00Z",
+            "size_bytes": 67,
+            "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+            "attachment_id": "att_0000000000004000800000000000601"
+          }
+        ],
+        "transcript_offset": "1",
+        "transcript_record_id": "rv60-transcript-seed-001"
+      },
+      {
+        "source": "webgui",
+        "status": "sent",
+        "role_id": "PM",
+        "room_id": "00000000-0000-4000-8000-000000000100",
+        "provider": null,
+        "raw_hash": null,
+        "raw_text": "RV40 parity ping",
+        "direction": "outbound",
+        "message_id": "d9606b71-d1d1-470d-a480-0bab19dc3d56",
+        "surface_id": "surface:equiv-pm",
+        "updated_at": "2026-06-16T10:10:33.014838+00:00",
+        "occurred_at": "2026-06-16T10:10:32.919824+00:00",
+        "recorded_at": "2026-06-16T10:10:32.919397+00:00",
+        "message_type": "user_message",
+        "correlation_id": "198c4145-eb3f-47fe-9e26-32f1af935f8b",
+        "normalized_text": "RV40 parity ping",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": null,
+        "agent_session_id": null,
+        "attachments_json": null,
+        "transcript_offset": null,
+        "transcript_record_id": null
+      }
+    ]
+  },
+  "mux": [
+    {
+      "argv": [
+        "rpc",
+        "surface.read_text",
+        "{\"workspace_id\": \"workspace:equiv\", \"surface_id\": \"surface:equiv-qa\", \"lines\": 1}"
+      ],
+      "cwd": "/app",
+      "env": {
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:32.769858+00:00"
+    },
+    {
+      "argv": [
+        "tree",
+        "--all"
+      ],
+      "cwd": "/app",
+      "env": {
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:32.818940+00:00"
+    },
+    {
+      "argv": [
+        "read-screen",
+        "--workspace",
+        "workspace:equiv",
+        "--surface",
+        "surface:equiv-qa",
+        "--lines",
+        "1"
+      ],
+      "cwd": "/app",
+      "env": {
+        "CMUX_SURFACE_ID": "surface:equiv-qa",
+        "CMUX_WORKSPACE_ID": "workspace:equiv",
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:32.824916+00:00"
+    },
+    {
+      "argv": [
+        "rpc",
+        "surface.read_text",
+        "{\"workspace_id\": \"workspace:equiv\", \"surface_id\": \"surface:equiv-pm\", \"lines\": 1}"
+      ],
+      "cwd": "/app",
+      "env": {
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:32.870102+00:00"
+    },
+    {
+      "argv": [
+        "read-screen",
+        "--workspace",
+        "workspace:equiv",
+        "--surface",
+        "surface:equiv-pm",
+        "--lines",
+        "1"
+      ],
+      "cwd": "/app",
+      "env": {
+        "CMUX_SURFACE_ID": "surface:equiv-pm",
+        "CMUX_WORKSPACE_ID": "workspace:equiv",
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:32.916905+00:00"
+    },
+    {
+      "argv": [
+        "rpc",
+        "surface.send_text",
+        "{\"workspace_id\": \"workspace:equiv\", \"surface_id\": \"surface:equiv-pm\", \"text\": \"RV40 parity ping\"}"
+      ],
+      "cwd": "/app",
+      "env": {
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:32.965654+00:00"
+    },
+    {
+      "argv": [
+        "rpc",
+        "surface.send_key",
+        "{\"workspace_id\": \"workspace:equiv\", \"surface_id\": \"surface:equiv-pm\", \"key\": \"Enter\"}"
+      ],
+      "cwd": "/app",
+      "env": {
+        "WEBGUI_PROJECT_ID": "Panthea"
+      },
+      "recorded_at": "2026-06-16T10:10:33.012607+00:00"
+    }
+  ]
+}

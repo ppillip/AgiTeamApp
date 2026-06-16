@@ -1,0 +1,28 @@
+{
+  "case_id": "WG-PROJ-01-happy",
+  "backend": "python",
+  "http": {
+    "status": 200,
+    "headers": { "content-type": "application/json", "date": "Mon, 16 Jun 2026 09:23:45 GMT" },
+    "body": {
+      "ok": true,
+      "data": {
+        "selected_project_id": "Panthea",
+        "projects": [
+          {
+            "project_id": "Panthea",
+            "workspace_id": "11111111-2222-3333-4444-555555555555",
+            "workspace_title": "Panthea",
+            "root_path": "/Users/ppillip/Projects/Panthea",
+            "connection_state": "connected",
+            "pm_connection_state": "present",
+            "room_count": 2,
+            "selected": true,
+            "last_discovered_at": "2026-06-16T09:23:40.123456+00:00",
+            "roles": ["PM", "DeveloperBE"]
+          }
+        ]
+      }
+    }
+  }
+}

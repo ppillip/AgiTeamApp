@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-HOOK-01-stop-transcript",
+  "contract_id": "WG-HOOK-01",
+  "title": "roomless Stop hook collect와 transcript dedupe/masking",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/internal/hook/collect",
+    "headers": { "authorization": "Bearer <fixture-collector-token>" },
+    "query": {},
+    "body": { "project_id": "Panthea", "role": "QA", "team_session_id": "rv40-session", "agent_id": "rv40-qa-agent", "hook_provider": "claude_code", "hook_event_name": "Stop", "hook_stdin": { "token": "<SECRET>" }, "transcript_path": "fixtures/transcripts/rv40-stop.jsonl" }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "transcript": "fixtures/transcripts/rv40-stop.jsonl", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["db.webgui_room[]", "db.webgui_message[]", "db.webgui_runtime_event[]", "ws_events[]"]
+}

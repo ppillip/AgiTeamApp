@@ -1,0 +1,18 @@
+{
+  "case_id": "WG-MSG-02-happy-fake-mux",
+  "http": {
+    "status": 409,
+    "headers": {
+      "content-length": "114",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": false,
+      "error": {
+        "code": "surface_not_found",
+        "message": "No active cmux surface for target role.",
+        "details": {}
+      }
+    }
+  }
+}

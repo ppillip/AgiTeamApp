@@ -1,0 +1,28 @@
+{
+  "case_id": "WG-PROJ-01-happy",
+  "backend": "rust",
+  "http": {
+    "status": 200,
+    "headers": { "content-type": "application/json", "date": "Mon, 16 Jun 2026 11:02:10 GMT" },
+    "body": {
+      "ok": true,
+      "data": {
+        "selected_project_id": "Panthea",
+        "projects": [
+          {
+            "project_id": "Panthea",
+            "workspace_id": "99999999-8888-7777-6666-555555555555",
+            "workspace_title": "Panthea",
+            "root_path": "/projects/Panthea",
+            "connection_state": "connected",
+            "pm_connection_state": "present",
+            "room_count": 2,
+            "selected": true,
+            "last_discovered_at": "2026-06-16T11:02:05.987000+00:00",
+            "roles": ["PM", "DeveloperBE"]
+          }
+        ]
+      }
+    }
+  }
+}

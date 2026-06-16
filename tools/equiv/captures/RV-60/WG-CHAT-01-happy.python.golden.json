@@ -1,0 +1,80 @@
+{
+  "case_id": "WG-CHAT-01-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-length": "1555",
+      "content-type": "application/json"
+    },
+    "body": {
+      "ok": true,
+      "data": {
+        "project_id": "Panthea",
+        "rooms": [
+          {
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "project_id": "Panthea",
+            "role": "QA",
+            "display_name": "아르고스",
+            "agent_type": "codex",
+            "room_type": "role",
+            "surface_id": "surface:equiv-qa",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "team_session_id": "rv60-team-session",
+            "agent_id": "rv60-qa-agent",
+            "ready_state": "ready",
+            "collector_state": "unknown",
+            "runtime_state": "disconnected",
+            "runtime_activity": "active",
+            "last_active_at": "2026-06-16T09:02:00+00:00",
+            "provenance": {
+              "origin": "transcript",
+              "runtime_state": "disconnected",
+              "is_real_data": true,
+              "is_mock": false
+            },
+            "last_message": {
+              "message_id": "00000000-0000-4000-8000-000000000302",
+              "text": "RV60 seeded assistant reply",
+              "direction": "inbound",
+              "status": "received",
+              "occurred_at": "2026-06-16T09:01:00+00:00"
+            },
+            "last_message_at": "2026-06-16T09:01:00+00:00",
+            "read_marker_at": null,
+            "unread_count": 2,
+            "connection_state": "connected"
+          },
+          {
+            "room_id": "00000000-0000-4000-8000-000000000100",
+            "project_id": "Panthea",
+            "role": "PM",
+            "display_name": "제우스",
+            "agent_type": "pm",
+            "room_type": "pm",
+            "surface_id": "surface:equiv-pm",
+            "agent_session_id": null,
+            "team_session_id": "rv60-team-session",
+            "agent_id": "rv60-pm-agent",
+            "ready_state": "ready",
+            "collector_state": "unknown",
+            "runtime_state": "disconnected",
+            "runtime_activity": "unknown",
+            "last_active_at": null,
+            "provenance": {
+              "origin": "mock",
+              "runtime_state": "mock",
+              "is_real_data": false,
+              "is_mock": true
+            },
+            "last_message": null,
+            "last_message_at": "2026-06-16T08:59:00+00:00",
+            "read_marker_at": null,
+            "unread_count": 0,
+            "connection_state": "connected"
+          }
+        ]
+      }
+    }
+  }
+}

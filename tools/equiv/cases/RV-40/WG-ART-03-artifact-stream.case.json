@@ -1,0 +1,19 @@
+{
+  "case_id": "WG-ART-03-range",
+  "contract_id": "WG-ART-03",
+  "title": "artifact file stream Range 206 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/artifacts/file/stream",
+    "headers": { "authorization": "Bearer <fixture-token>", "range": "bytes=0-15" },
+    "query": {
+      "project_id": "Panthea",
+      "root_type": "documents",
+      "path": "products/AgiTeamApp/04.development/02.설계/DS-120_모니터백엔드Rust전환설계서/DS-120_모니터백엔드Rust전환설계서_latest.md"
+    },
+    "body": null
+  },
+  "seed": { "fs_tree": "fixtures/fs/artifacts" },
+  "array_sort_paths": []
+}

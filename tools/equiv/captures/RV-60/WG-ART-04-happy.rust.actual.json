@@ -1,0 +1,18 @@
+{
+  "case_id": "WG-ART-04-happy",
+  "http": {
+    "status": 503,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "117"
+    },
+    "body": {
+      "error": {
+        "code": "artifact_watcher_unavailable",
+        "details": {},
+        "message": "Artifact watcher is not active."
+      },
+      "ok": false
+    }
+  }
+}

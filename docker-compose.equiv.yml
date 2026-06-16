@@ -1,0 +1,97 @@
+name: agiteamapp-equiv
+
+services:
+  equiv-db:
+    image: postgres:16-alpine
+    container_name: agiteamapp-equiv-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agiteamapp}
+      POSTGRES_USER: ${POSTGRES_USER:-agiteamapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-equiv-local-only}
+    ports:
+      - "${AGITEAMAPP_EQUIV_DB_PORT:-15432}:5432"
+    volumes:
+      - agiteamapp_equiv_pgdata:/var/lib/postgresql/data
+      - ./backend/migrations:/migrations:ro
+      - ./scripts/equiv:/equiv:ro
+      - agiteamapp_equiv_tmp:/tmp/agiteamapp-equiv
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  python-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agiteamapp-equiv-python
+    depends_on:
+      equiv-db:
+        condition: service_healthy
+    environment:
+      WEBGUI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-agiteamapp}:${POSTGRES_PASSWORD:-change-me-equiv-local-only}@equiv-db:5432/${AGITEAMAPP_EQUIV_PY_DB:-agiteamapp_equiv_py}
+      WEBGUI_PROJECT_ID: ${WEBGUI_PROJECT_ID:-Panthea}
+      WEBGUI_PROJECTS_BASE_DIR: ${WEBGUI_PROJECTS_BASE_DIR:-/projects}
+      WEBGUI_PROJECT_ROOTS_JSON: ${WEBGUI_PROJECT_ROOTS_JSON:-{"Panthea":"/projects/Panthea"}}
+      WEBGUI_AGITEAM_LOGS_SUBDIR: ${WEBGUI_AGITEAM_LOGS_SUBDIR:-.agiteam/equiv-empty-logs}
+      WEBGUI_ARTIFACTS_ROOT: /projects/Panthea/documents/products/AgiTeamApp
+      WEBGUI_ENABLE_BACKGROUND: ${WEBGUI_ENABLE_BACKGROUND:-true}
+      WEBGUI_ARTIFACT_WATCHER_ENABLED: ${WEBGUI_ARTIFACT_WATCHER_ENABLED:-false}
+      WEBGUI_CMUX_BIN: /equiv/fake_cmux.py
+      AGITEAMAPP_EQUIV_FAKE_MUX_LOG: ${AGITEAMAPP_EQUIV_FAKE_MUX_LOG:-/tmp/agiteamapp-equiv/fake-mux.jsonl}
+    ports:
+      - "${AGITEAMAPP_EQUIV_PY_PORT:-18080}:8000"
+    volumes:
+      - ../..:/projects/Panthea:ro
+      - ./scripts/equiv:/equiv:ro
+      - agiteamapp_equiv_tmp:/tmp/agiteamapp-equiv
+
+  rust-backend:
+    build:
+      context: .
+      dockerfile: scripts/equiv/Dockerfile.rust
+    container_name: agiteamapp-equiv-rust
+    depends_on:
+      equiv-db:
+        condition: service_healthy
+    working_dir: /workspace/backend-rs
+    environment:
+      AGITEAMAPP_DATABASE_URL: postgres://${POSTGRES_USER:-agiteamapp}:${POSTGRES_PASSWORD:-change-me-equiv-local-only}@equiv-db:5432/${AGITEAMAPP_EQUIV_RS_DB:-agiteamapp_equiv_rs}
+      AGITEAMAPP_PROJECT_ID: ${AGITEAMAPP_PROJECT_ID:-Panthea}
+      AGITEAMAPP_PROJECTS_BASE: ${AGITEAMAPP_PROJECTS_BASE:-/projects}
+      AGITEAMAPP_RS_PORT: "8000"
+      AGITEAMAPP_MUX: ${AGITEAMAPP_MUX:-cmux}
+      AGITEAMAPP_CMUX_BIN: /equiv/fake_cmux.py
+      AGITEAMAPP_TEAM_BIN: /equiv/fake_team.py
+      AGITEAMAPP_ARTIFACT_WATCHER_ENABLED: ${AGITEAMAPP_ARTIFACT_WATCHER_ENABLED:-false}
+      AGITEAMAPP_EQUIV_FAKE_MUX_LOG: ${AGITEAMAPP_EQUIV_FAKE_MUX_LOG:-/tmp/agiteamapp-equiv/fake-mux.jsonl}
+      CARGO_TARGET_DIR: /target
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        /usr/local/cargo/bin/cargo run -p agiteamapp-http &
+        app_pid=$$!
+        until bash -lc ':</dev/tcp/127.0.0.1/8000' >/dev/null 2>&1; do
+          if ! kill -0 "$$app_pid" >/dev/null 2>&1; then
+            wait "$$app_pid"
+          fi
+          sleep 1
+        done
+        socat TCP-LISTEN:8001,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:8000 &
+        wait "$$app_pid"
+    ports:
+      - "${AGITEAMAPP_EQUIV_RS_PORT:-18081}:8001"
+    volumes:
+      - .:/workspace
+      - ../..:/projects/Panthea:ro
+      - ./scripts/equiv:/equiv:ro
+      - agiteamapp_equiv_target:/target
+      - agiteamapp_equiv_tmp:/tmp/agiteamapp-equiv
+
+volumes:
+  agiteamapp_equiv_pgdata:
+  agiteamapp_equiv_target:
+  agiteamapp_equiv_tmp:

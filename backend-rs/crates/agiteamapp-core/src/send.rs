@@ -79,6 +79,13 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
         .upsert_room(project_id, PM_ROLE_ID, &target.display_name, "pm", None, None)
         .await?;
 
+    // Python pm_bridge: outbound message.team_session_id = room.team_session_id (DV-41 provenance).
+    // upsert 는 team_session 을 COALESCE 보존하므로 방의 현재 team_session 을 읽어 싣는다.
+    let team_session = repo
+        .get_room_full(&room.room_id)
+        .await?
+        .and_then(|r| r.team_session_id);
+
     // 4) outbound pending 선저장 (공개 text = 사용자 원문)
     let msg = repo
         .create_message(NewMessage {
@@ -87,7 +94,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
             correlation_id: Some(new_correlation_id.to_string()),
             role_id: PM_ROLE_ID.to_string(),
             surface_id: Some(target.surface_id.clone()),
-            team_session_id: None,
+            team_session_id: team_session.clone(),
             direction: "outbound".to_string(),
             source: "webgui".to_string(),
             message_type: "user_message".to_string(),
@@ -97,7 +104,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
             transcript_record_id: None,
             raw_text: Some(clean.clone()),
             normalized_text: clean.clone(),
-            raw_hash: format!("pending:{new_correlation_id}"),
+            raw_hash: None, // Python outbound 정합 (dedup 비대상)
             status: "pending".to_string(),
             occurred_at_iso: repo.server_now().await?,
         })
@@ -131,7 +138,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
     .await?;
 
     // 공개 message (status 반영본)
-    let mut message = crate::message::message_to_dict(&msg, project_id);
+    let mut message = crate::message::message_to_dict(&msg, project_id, Some("rest"));
     message["status"] = json!(status);
     message["client_message_id"] = json!(req.client_message_id);
 
@@ -163,6 +170,8 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
         "workspace_id": target.workspace_id,
         "agent_session_id": Value::Null,
         "status": status,
+        // Python ack.submitted_at = cmux submit 완료 시각(result.ended_at). normalize 대상.
+        "submitted_at": msg.occurred_at,
         "provenance": provenance_pm_bridge(),
         "client_message_id": req.client_message_id,
     });

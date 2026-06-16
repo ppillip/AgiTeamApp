@@ -1,7 +1,7 @@
 //! WG-HOOK-01: roomless hook 수집. (project_id, role) 방 upsert → runtime_event → hook_stop 트리거.
 //! 레퍼런스: Python collector_service.collect_hook + collect_event.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::events::EventPublisher;
@@ -32,19 +32,16 @@ pub struct HookCollectRequest {
     pub transcript_path: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    // hook payload 원천: hook_stdin 1차, payload 별칭 fallback (Python collect_hook 정합).
+    // token 등 secret 은 mask_payload 로 저장 시 마스킹된다.
+    #[serde(default)]
+    pub hook_stdin: Option<serde_json::Map<String, Value>>,
+    #[serde(default)]
+    pub payload: Option<serde_json::Map<String, Value>>,
 }
 
 fn default_event_name() -> String {
     "Stop".to_string()
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct HookCollectResult {
-    pub accepted: bool,
-    pub project_id: String,
-    pub role: String,
-    pub event_type: String,
-    pub room_id: String,
 }
 
 pub async fn collect_hook<R: WebguiRepository, P: EventPublisher, T: TranscriptPort>(
@@ -52,7 +49,7 @@ pub async fn collect_hook<R: WebguiRepository, P: EventPublisher, T: TranscriptP
     publisher: &P,
     transcript: &T,
     req: HookCollectRequest,
-) -> Result<HookCollectResult, ApiError> {
+) -> Result<Value, ApiError> {
     let provider = normalize_provider(req.hook_provider.as_deref().or(req.cli.as_deref()));
     let event_type = normalize_event_type(provider.as_deref().unwrap_or(""), &req.hook_event_name);
     let room_type = if req.role == "PM" { "pm" } else { "role" };
@@ -69,20 +66,27 @@ pub async fn collect_hook<R: WebguiRepository, P: EventPublisher, T: TranscriptP
         )
         .await?;
 
-    // hint payload (Python: session_id/transcript_path/cwd/agent_id 병합)
-    let mut payload = serde_json::Map::new();
+    // hint payload (Python collect_hook 정합):
+    //   payload = dict(hook_stdin or payload or {}) → session_id/transcript_path/cwd/agent_id setdefault.
+    // hook_stdin 의 token 등 secret 은 아래 mask_payload 에서 마스킹된다.
+    let mut payload: serde_json::Map<String, Value> =
+        req.hook_stdin.clone().or_else(|| req.payload.clone()).unwrap_or_default();
     if let Some(v) = &req.session_id {
-        payload.insert("session_id".into(), v.clone().into());
+        payload.entry("session_id".to_string()).or_insert_with(|| v.clone().into());
     }
     if let Some(v) = &req.transcript_path {
-        payload.insert("transcript_path".into(), v.clone().into());
+        payload.entry("transcript_path".to_string()).or_insert_with(|| v.clone().into());
     }
     if let Some(v) = &req.cwd {
-        payload.insert("cwd".into(), v.clone().into());
+        payload.entry("cwd".to_string()).or_insert_with(|| v.clone().into());
     }
-    if let Some(v) = &req.agent_id {
-        payload.insert("agent_id".into(), v.clone().into());
-    }
+    // agent_id 는 None 이어도 키를 둔다(Python setdefault 동등).
+    payload
+        .entry("agent_id".to_string())
+        .or_insert_with(|| match &req.agent_id {
+            Some(v) => v.clone().into(),
+            None => Value::Null,
+        });
 
     let ev = repo
         .insert_runtime_event(NewEvent {
@@ -131,11 +135,10 @@ pub async fn collect_hook<R: WebguiRepository, P: EventPublisher, T: TranscriptP
         transcript.collect(&hint).await;
     }
 
-    Ok(HookCollectResult {
-        accepted: true,
-        project_id: req.project_id,
-        role: req.role,
-        event_type,
-        room_id: room.room_id,
-    })
+    // RV-55 §4: 정본 = Python 상세 응답 `{event: event_to_dict, room_id}`.
+    // (Python collect_hook → collect_event → {"event": event_to_dict(ev)} + room_id)
+    Ok(json!({
+        "event": crate::event::event_to_dict(&ev),
+        "room_id": room.room_id,
+    }))
 }

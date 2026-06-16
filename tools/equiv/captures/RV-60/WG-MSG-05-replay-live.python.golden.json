@@ -1,0 +1,104 @@
+{
+  "case_id": "WG-MSG-05-replay-live",
+  "ws_events": [
+    {
+      "type": "message_update",
+      "payload": {
+        "type": "message_update",
+        "cursor": "2026-06-16T09:01:00+00:00|message:00000000-0000-4000-8000-000000000302",
+        "data": {
+          "update_id": "message:00000000-0000-4000-8000-000000000302",
+          "room_id": "00000000-0000-4000-8000-000000000101",
+          "correlation_id": "00000000-0000-4000-8000-000000000501",
+          "update_type": "message_received",
+          "message": {
+            "message_id": "00000000-0000-4000-8000-000000000302",
+            "project_id": "Panthea",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "role": "QA",
+            "surface_id": "surface:equiv-qa",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "team_session_id": "rv60-team-session",
+            "direction": "inbound",
+            "source": "transcript",
+            "message_type": "assistant_message",
+            "text": "RV60 seeded assistant reply",
+            "attachments": [
+              {
+                "kind": "image",
+                "width": 1,
+                "height": 1,
+                "sha256": "seed-rv60-preview",
+                "filename": "upload-20260616T090000Z-rv60.png",
+                "mime_type": "image/png",
+                "expires_at": "2026-06-17T09:00:00Z",
+                "size_bytes": 67,
+                "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+                "attachment_id": "att_0000000000004000800000000000601"
+              }
+            ],
+            "status": "received",
+            "provenance": {
+              "origin": "transcript",
+              "runtime_state": "live",
+              "is_real_data": true,
+              "is_mock": false,
+              "transport": "websocket"
+            },
+            "occurred_at": "2026-06-16T09:01:00+00:00",
+            "recorded_at": "2026-06-16T09:01:00+00:00",
+            "updated_at": "2026-06-16T09:01:01+00:00"
+          },
+          "event": null,
+          "occurred_at": "2026-06-16T09:01:00+00:00"
+        }
+      },
+      "room_id": "00000000-0000-4000-8000-000000000101",
+      "cursor": "2026-06-16T09:01:00+00:00|message:00000000-0000-4000-8000-000000000302"
+    },
+    {
+      "type": "message_update",
+      "payload": {
+        "type": "message_update",
+        "cursor": "2026-06-16T10:10:34.508510+00:00|message:c2b33240-656d-49f5-a4b9-5dcf6022c04f",
+        "data": {
+          "update_id": "message:c2b33240-656d-49f5-a4b9-5dcf6022c04f",
+          "room_id": "00000000-0000-4000-8000-000000000101",
+          "correlation_id": "00000000-0000-4000-8000-000000000501",
+          "update_type": "message_received",
+          "message": {
+            "message_id": "c2b33240-656d-49f5-a4b9-5dcf6022c04f",
+            "project_id": "Panthea",
+            "room_id": "00000000-0000-4000-8000-000000000101",
+            "correlation_id": "00000000-0000-4000-8000-000000000501",
+            "role": "QA",
+            "surface_id": "surface:equiv-qa",
+            "agent_session_id": "00000000-0000-4000-8000-000000000201",
+            "team_session_id": "rv60-team-session",
+            "direction": "inbound",
+            "source": "transcript",
+            "message_type": "assistant_message",
+            "text": "RV40 collected assistant message",
+            "attachments": [],
+            "status": "received",
+            "provenance": {
+              "origin": "transcript",
+              "runtime_state": "live",
+              "is_real_data": true,
+              "is_mock": false,
+              "transport": "websocket"
+            },
+            "occurred_at": "2026-06-16T09:02:30+00:00",
+            "recorded_at": "2026-06-16T10:10:34.508510+00:00",
+            "updated_at": "2026-06-16T10:10:34.508510+00:00"
+          },
+          "event": null,
+          "occurred_at": "2026-06-16T09:02:30+00:00"
+        }
+      },
+      "room_id": "00000000-0000-4000-8000-000000000101",
+      "cursor": "2026-06-16T10:10:34.508510+00:00|message:c2b33240-656d-49f5-a4b9-5dcf6022c04f"
+    }
+  ]
+}

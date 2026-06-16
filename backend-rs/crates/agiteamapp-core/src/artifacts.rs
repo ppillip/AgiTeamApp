@@ -175,23 +175,28 @@ impl ArtifactService {
         let real = match fs::canonicalize(&candidate) {
             Ok(r) => r,
             Err(_) => {
-                // 미존재 경로(write 신규 등): 부모까지 canonicalize 해 within-root 만 검증.
-                let parent = candidate.parent().unwrap_or(&self.root);
-                match fs::canonicalize(parent) {
-                    Ok(p) if p.starts_with(&self.root) => {
-                        // secret 검사
-                        for seg in &segments {
-                            if is_secret_name(seg) {
-                                return Err(err("artifact_hidden", 403, "Hidden or restricted file."));
-                            }
-                        }
-                        return Ok(ResolvedPath {
-                            abs: p.join(candidate.file_name().unwrap_or_default()),
-                            rel,
-                        });
+                // 미존재 경로(write 신규 등): secret 검사 후, 존재하는 최상위 조상까지
+                // 거슬러 올라가 within-root 만 검증한다. 부모 디렉토리가 아직 없어도
+                // (write 신규 하위경로) 허용 — Python 은 write 시 create_dir_all 로 생성하고
+                // 실패 시 write_failed(500) 를 낸다. 부모 1단계만 보던 기존 로직은 신규
+                // 하위 디렉토리에서 artifact_path_not_found(404) 를 내 Python(500)과 어긋났다.
+                for seg in &segments {
+                    if is_secret_name(seg) {
+                        return Err(err("artifact_hidden", 403, "Hidden or restricted file."));
                     }
-                    _ => return Err(err("artifact_path_not_found", 404, "Artifact path not found.")),
                 }
+                let mut ancestor = candidate.parent();
+                while let Some(a) = ancestor {
+                    if let Ok(real_a) = fs::canonicalize(a) {
+                        if real_a.starts_with(&self.root) {
+                            // lexical abs (traversal 은 위에서 차단, within-root 확인됨)
+                            return Ok(ResolvedPath { abs: self.root.join(&rel), rel });
+                        }
+                        return Err(err("path_forbidden", 403, "Path is outside the allowed root."));
+                    }
+                    ancestor = a.parent();
+                }
+                return Err(err("artifact_path_not_found", 404, "Artifact path not found."));
             }
         };
         if !real.starts_with(&self.root) {
@@ -489,9 +494,9 @@ impl ArtifactService {
             return Err(err("not_file", 422, "Target is not a file."));
         }
         if let Some(parent) = rp.abs.parent() {
-            fs::create_dir_all(parent).map_err(|_| err("artifact_write_failed", 500, "Write failed."))?;
+            fs::create_dir_all(parent).map_err(|_| err("artifact_write_failed", 500, "Failed to write artifact."))?;
         }
-        fs::write(&rp.abs, content).map_err(|_| err("artifact_write_failed", 500, "Write failed."))?;
+        fs::write(&rp.abs, content).map_err(|_| err("artifact_write_failed", 500, "Failed to write artifact."))?;
         Ok(json!({ "saved": true, "path": rp.rel }))
     }
 

@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-ART-05-happy-md",
+  "contract_id": "WG-ART-05",
+  "title": "허용 확장자 write 성공과 artifact_changed side effect",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/artifacts/write",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": { "project_id": "Panthea", "root_type": "documents" },
+    "body": { "path": "rv40/parity-write.md", "content": "# RV40 parity write\n" }
+  },
+  "seed": { "fs_tree": "fixtures/fs/artifacts", "db_reset": "scripts/equiv/db-reset.sh" },
+  "array_sort_paths": ["ws_events[]"]
+}

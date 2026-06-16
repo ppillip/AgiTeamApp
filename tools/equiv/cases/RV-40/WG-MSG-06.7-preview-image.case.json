@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-MSG-06.7-preview",
+  "contract_id": "WG-MSG-06.7",
+  "title": "업로드 이미지 preview binary 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {},
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "fs_tree": "fixtures/fs/attachments" },
+  "array_sort_paths": []
+}

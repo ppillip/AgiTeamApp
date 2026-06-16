@@ -50,7 +50,12 @@ function loadCrepe() {
 export default {
   name: "ArtifactViewer",
   components: { Icon, CodeMirrorEditor },
-  props: { big: { type: Boolean, default: false } },
+  props: {
+    big: { type: Boolean, default: false },
+    // popup=true: 독립 새창(viewer.html)에서 마운트. big 레이아웃을 그대로 쓰되
+    // 헤더의 네비 버튼(채팅으로/크게/새창/닫기)을 숨긴다(새창에선 무의미).
+    popup: { type: Boolean, default: false },
+  },
   emits: ["expand", "collapse"],
   data() {
     return {
@@ -284,53 +289,24 @@ export default {
       }
     },
     // [새창] 현재 선택 파일을 독립 팝업 창으로 표시(window.open).
+    //   - '크게보기'와 동일한 ArtifactViewer 뷰어를 viewer.html 엔트리에 마운트해
+    //     md/code/image/html 을 raw 가 아니라 '렌더된 뷰'로 보여준다(뷰어 로직 재사용).
     //   - 파일경로 기반 unique window name → 파일마다 별도 창, 여러 파일 동시 팝업 가능.
     //     (같은 파일 재클릭 시 기존 창 재사용·포커스 → 중복 창 방지)
-    //   - content(코드/마크다운/텍스트)는 라인넘버 + 모노스페이스로 직접 렌더(추가 요청 없음, 가독성 유지).
-    //   - content 없는(pdf/image/바이너리) 파일은 백엔드 원본 stream URL 을 새 창으로.
+    //   - 파일 식별은 path + 현재 선택 project_id/root_type 쿼리로 전달(viewer 페이지가 직접 fetch).
     //   - 기존 '크게'(인라인 확대)·'채팅으로'·저장 동작과 독립.
     openInWindow() {
       if (!this.file) return;
       const path = this.file.path || this.file.name || "file";
       const winName = "agiteam-file-" + path.replace(/[^a-zA-Z0-9]+/g, "_");
-      const content = this.file.content;
-      // content 없는 형식(pdf/image/바이너리) → 백엔드 원본을 새 창으로
-      if (content == null) {
-        if (this.streamUrl) window.open(this.streamUrl, winName);
-        return;
-      }
-      const win = window.open("", winName);
-      if (!win) return; // 팝업 차단됨
-      const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      const lines = String(content).split("\n");
-      const rows = lines
-        .map((ln, i) => `<div class="row"><span class="ln">${i + 1}</span><span class="src">${esc(ln) || " "}</span></div>`)
-        .join("");
-      const title = esc(this.file.name || path);
-      const pathLabel = esc(path);
-      const doc = `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title>
-<style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #fff; color: #1a1a1e; font-family: "Pretendard", system-ui, -apple-system, sans-serif; }
-  .hdr { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid #ececef; background: #fafafb; font-size: 12.5px; font-weight: 600; color: #4a4a52; }
-  .hdr .badge { flex: none; border-radius: 6px; background: #fbeede; color: #c2570b; padding: 2px 7px; font-size: 10px; font-weight: 800; }
-  .hdr .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .code-wrap { padding: 10px 0 40px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.55; }
-  .row { display: flex; padding: 0 14px; }
-  .row:hover { background: #faf7f2; }
-  .ln { flex: none; width: 48px; padding-right: 14px; text-align: right; color: #b8b8c0; user-select: none; }
-  .src { white-space: pre; tab-size: 2; }
-</style></head>
-<body>
-  <div class="hdr"><span class="badge">${esc((this.file.ext || "").toUpperCase()) || "DOC"}</span><span class="path">${pathLabel}</span></div>
-  <div class="code-wrap">${rows}</div>
-</body></html>`;
-      win.document.open();
-      win.document.write(doc);
-      win.document.close();
-      win.focus();
+      const params = new URLSearchParams();
+      params.set("path", path);
+      if (store.selectedProjectId) params.set("project_id", store.selectedProjectId);
+      if (store.rootType) params.set("root_type", store.rootType);
+      if (this.file.name) params.set("name", this.file.name);
+      if (this.file.ext) params.set("ext", this.file.ext);
+      const win = window.open(`viewer.html?${params.toString()}`, winName);
+      if (win) win.focus(); // 팝업 차단 시 null — 조용히 무시(기존 동작과 동일)
     },
     // md 본문 내 .mermaid-block 들을 SVG 다이어그램으로 변환. 실패한 블록은 코드블록으로 폴백.
     async renderMermaid() {
@@ -413,7 +389,7 @@ export default {
           <Icon name="check" :size="14" />{{ saving ? "저장 중…" : "저장" }}
         </button>
         <!-- 큰 뷰: 채팅으로 복귀 / 패널: 크게 + 닫기 -->
-        <button v-if="big" @click="$emit('collapse')" class="flex items-center gap-1.5 rounded-lg bg-[#F4F4F6] px-3 py-1.5 text-[12.5px] font-semibold text-ink-600 hover:bg-line-soft" title="채팅으로 돌아가기">
+        <button v-if="big && !popup" @click="$emit('collapse')" class="flex items-center gap-1.5 rounded-lg bg-[#F4F4F6] px-3 py-1.5 text-[12.5px] font-semibold text-ink-600 hover:bg-line-soft" title="채팅으로 돌아가기">
           <Icon name="x" :size="15" />채팅으로
         </button>
         <template v-else>

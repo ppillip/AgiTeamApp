@@ -209,7 +209,7 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
                 // raw_text=mask_text(원본), normalized=sanitize_tool_leak(표시본). dedup(raw_hash)는 원본 기준 불변.
                 raw_text: mask_text(Some(text)),
                 normalized_text: sanitize_tool_leak(Some(text)).unwrap_or_default(),
-                raw_hash,
+                raw_hash: Some(raw_hash),
                 status: status.clone(),
                 occurred_at_iso: occurred,
             })
@@ -225,7 +225,7 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
                 "room_id": room_id,
                 "correlation_id": correlation_id,
                 "update_type": if is_assistant { "message_received" } else { "message_sent" },
-                "message": crate::message::message_to_dict(&msg, project_id),
+                "message": crate::message::message_to_dict(&msg, project_id, Some("websocket")),
                 "event": Value::Null,
                 "occurred_at": msg.occurred_at,
             },

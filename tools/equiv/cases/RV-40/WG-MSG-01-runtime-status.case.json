@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-MSG-01-happy",
+  "contract_id": "WG-MSG-01",
+  "title": "project/room/role 조건별 runtime status 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/runtime/status",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": { "project_id": "Panthea" },
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "activity_seed": "fixtures/runtime/activity-pulse.json" },
+  "array_sort_paths": ["http.body.data.rooms[]"]
+}

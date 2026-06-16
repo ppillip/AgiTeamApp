@@ -1,0 +1,189 @@
+{
+  "case_id": "WG-MSG-02-happy-fake-mux",
+  "http": {
+    "status": 201,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "1296"
+    },
+    "body": {
+      "data": {
+        "ack": {
+          "accepted": true,
+          "agent_session_id": null,
+          "client_message_id": "rv40-client-msg-001",
+          "correlation_id": "e1ad8a20-1523-41bf-8e8c-1ea812c01d4b",
+          "message_id": "abe51d13-0a25-4120-9fcb-79032386104d",
+          "project_id": "Panthea",
+          "provenance": {
+            "is_mock": false,
+            "is_real_data": true,
+            "origin": "pm_bridge",
+            "runtime_state": "live",
+            "transport": "rest"
+          },
+          "role": "PM",
+          "room_id": "00000000-0000-4000-8000-000000000100",
+          "send_submitted": true,
+          "status": "sent",
+          "submitted_at": "2026-06-16T10:10:33.310159+00:00",
+          "surface_id": "surface:equiv-pm",
+          "workspace_id": "workspace:equiv"
+        },
+        "message": {
+          "agent_session_id": null,
+          "attachments": [],
+          "client_message_id": "rv40-client-msg-001",
+          "correlation_id": "e1ad8a20-1523-41bf-8e8c-1ea812c01d4b",
+          "direction": "outbound",
+          "message_id": "abe51d13-0a25-4120-9fcb-79032386104d",
+          "message_type": "user_message",
+          "occurred_at": "2026-06-16T10:10:33.310159+00:00",
+          "project_id": "Panthea",
+          "provenance": {
+            "is_mock": false,
+            "is_real_data": true,
+            "origin": "webgui",
+            "runtime_state": "live",
+            "transport": "rest"
+          },
+          "recorded_at": "2026-06-16T10:10:33.310449+00:00",
+          "role": "PM",
+          "room_id": "00000000-0000-4000-8000-000000000100",
+          "source": "webgui",
+          "status": "sent",
+          "surface_id": "surface:equiv-pm",
+          "team_session_id": "rv60-team-session",
+          "text": "RV40 parity ping",
+          "updated_at": "2026-06-16T10:10:33.310449+00:00"
+        }
+      },
+      "ok": true
+    }
+  },
+  "db": {
+    "webgui_message": [
+      {
+        "source": "webgui",
+        "status": "sent",
+        "role_id": "QA",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "provider": null,
+        "raw_hash": "seed:rv60:user:001",
+        "raw_text": "RV60 seeded user prompt",
+        "direction": "outbound",
+        "message_id": "00000000-0000-4000-8000-000000000301",
+        "surface_id": "surface:equiv-qa",
+        "updated_at": "2026-06-16T09:00:01+00:00",
+        "occurred_at": "2026-06-16T09:00:00+00:00",
+        "recorded_at": "2026-06-16T09:00:00+00:00",
+        "message_type": "user_message",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "normalized_text": "RV60 seeded user prompt",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": null,
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "attachments_json": null,
+        "transcript_offset": null,
+        "transcript_record_id": null
+      },
+      {
+        "source": "transcript",
+        "status": "received",
+        "role_id": "QA",
+        "room_id": "00000000-0000-4000-8000-000000000101",
+        "provider": "claude_code",
+        "raw_hash": "seed:rv60:assistant:001",
+        "raw_text": "RV60 seeded assistant reply",
+        "direction": "inbound",
+        "message_id": "00000000-0000-4000-8000-000000000302",
+        "surface_id": "surface:equiv-qa",
+        "updated_at": "2026-06-16T09:01:01+00:00",
+        "occurred_at": "2026-06-16T09:01:00+00:00",
+        "recorded_at": "2026-06-16T09:01:00+00:00",
+        "message_type": "assistant_message",
+        "correlation_id": "00000000-0000-4000-8000-000000000501",
+        "normalized_text": "RV60 seeded assistant reply",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": "fixtures/transcripts/rv40-stop.jsonl",
+        "agent_session_id": "00000000-0000-4000-8000-000000000201",
+        "attachments_json": [
+          {
+            "kind": "image",
+            "width": 1,
+            "height": 1,
+            "sha256": "seed-rv60-preview",
+            "filename": "upload-20260616T090000Z-rv60.png",
+            "mime_type": "image/png",
+            "expires_at": "2026-06-17T09:00:00Z",
+            "size_bytes": 67,
+            "preview_url": "/api/webgui/message-attachments/att_0000000000004000800000000000601/preview",
+            "attachment_id": "att_0000000000004000800000000000601"
+          }
+        ],
+        "transcript_offset": "1",
+        "transcript_record_id": "rv60-transcript-seed-001"
+      },
+      {
+        "source": "webgui",
+        "status": "sent",
+        "role_id": "PM",
+        "room_id": "00000000-0000-4000-8000-000000000100",
+        "provider": null,
+        "raw_hash": null,
+        "raw_text": "RV40 parity ping",
+        "direction": "outbound",
+        "message_id": "abe51d13-0a25-4120-9fcb-79032386104d",
+        "surface_id": "surface:equiv-pm",
+        "updated_at": "2026-06-16T10:10:33.320787+00:00",
+        "occurred_at": "2026-06-16T10:10:33.310159+00:00",
+        "recorded_at": "2026-06-16T10:10:33.310449+00:00",
+        "message_type": "user_message",
+        "correlation_id": "e1ad8a20-1523-41bf-8e8c-1ea812c01d4b",
+        "normalized_text": "RV40 parity ping",
+        "team_session_id": "rv60-team-session",
+        "transcript_path": null,
+        "agent_session_id": null,
+        "attachments_json": null,
+        "transcript_offset": null,
+        "transcript_record_id": null
+      }
+    ]
+  },
+  "mux": [
+    {
+      "argv": [
+        "team",
+        "read",
+        "--to",
+        "PM",
+        "--lines",
+        "1"
+      ],
+      "cwd": "/workspace/backend-rs",
+      "env": {
+        "AGITEAMAPP_PROJECT_ID": "Panthea",
+        "AGITEAM_HOME": "/projects/",
+        "AGITEAM_MUX": "cmux"
+      },
+      "recorded_at": "2026-06-16T10:10:33.306773+00:00"
+    },
+    {
+      "argv": [
+        "team",
+        "send",
+        "--to",
+        "PM",
+        "--text",
+        "RV40 parity ping"
+      ],
+      "cwd": "/workspace/backend-rs",
+      "env": {
+        "AGITEAMAPP_PROJECT_ID": "Panthea",
+        "AGITEAM_HOME": "/projects/",
+        "AGITEAM_MUX": "cmux"
+      },
+      "recorded_at": "2026-06-16T10:10:33.318984+00:00"
+    }
+  ]
+}

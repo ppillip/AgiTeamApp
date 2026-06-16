@@ -1,0 +1,17 @@
+{
+  "case_id": "META-02-happy",
+  "http": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "content-length": "73"
+    },
+    "body": {
+      "data": {
+        "docs": "/docs",
+        "service": "agiteamapp-webgui-backend"
+      },
+      "ok": true
+    }
+  }
+}

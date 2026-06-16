@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-MSG-03-happy",
+  "contract_id": "WG-MSG-03",
+  "title": "단건 메시지와 related_updates 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/messages/00000000-0000-4000-8000-000000000302",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {},
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql" },
+  "array_sort_paths": ["http.body.data.related_updates[]"]
+}

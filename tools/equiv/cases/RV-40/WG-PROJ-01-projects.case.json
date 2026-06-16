@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-PROJ-01-happy",
+  "contract_id": "WG-PROJ-01",
+  "title": "DB room과 fake discovery mock을 합쳐 project 목록 반환",
+  "request": {
+    "kind": "http",
+    "method": "GET",
+    "path": "/api/webgui/projects",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {},
+    "body": null
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "mux_mock": "scripts/equiv/fake_cmux.py" },
+  "array_sort_paths": ["http.body.data.projects[]"]
+}

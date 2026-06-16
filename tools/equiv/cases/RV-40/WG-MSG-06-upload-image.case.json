@@ -1,0 +1,15 @@
+{
+  "case_id": "WG-MSG-06-happy-png",
+  "contract_id": "WG-MSG-06",
+  "title": "multipart PNG 이미지 업로드",
+  "request": {
+    "kind": "http",
+    "method": "POST",
+    "path": "/api/webgui/message-attachments/images",
+    "headers": { "authorization": "Bearer <fixture-token>" },
+    "query": {},
+    "body": { "multipart": { "project_id": "Panthea", "client_attachment_id": "rv40-image-001", "file": "fixtures/images/rv40-1x1.png" } }
+  },
+  "seed": { "db_seed": "scripts/equiv/seed.sql", "fs_tree": "fixtures/fs/attachments" },
+  "array_sort_paths": []
+}

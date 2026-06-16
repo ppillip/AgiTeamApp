@@ -13,6 +13,15 @@ export default defineConfig(({ mode }) => {
   const wsTarget = target.replace(/^http/i, "ws");
   return {
     plugins: [vue()],
+    // 멀티페이지: 메인 앱(index.html) + 산출물 '새창' 뷰어(viewer.html)
+    build: {
+      rollupOptions: {
+        input: {
+          main: new URL("./index.html", import.meta.url).pathname,
+          viewer: new URL("./viewer.html", import.meta.url).pathname,
+        },
+      },
+    },
     server: {
       host,
       port,
