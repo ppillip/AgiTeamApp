@@ -68,7 +68,7 @@ export default {
     <div class="flex items-center justify-between px-[18px] pt-[18px]">
       <h2 class="text-[16px] font-bold">채팅방</h2>
       <div class="flex gap-0.5">
-        <button class="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6] hover:text-ink-600"><Icon name="sort" :size="16" /></button>
+        <!-- 검색(돋보기): 기능 구현은 추후 별도 지시. 지금은 버튼만 유지. -->
         <button class="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-ink-500 hover:bg-[#F4F4F6] hover:text-ink-600"><Icon name="search" :size="16" /></button>
       </div>
     </div>
