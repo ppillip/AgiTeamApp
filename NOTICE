@@ -1,0 +1,16 @@
+This product includes third-party software.
+
+================================================================================
+material-icon-theme
+================================================================================
+산출물 파일트리(ArtifactTree)의 파일/폴더 아이콘에 사용.
+일부 SVG 아이콘만 src/assets/file-icons/ 로 복사(vendored)해 정적 사용한다.
+적용 위치: src/assets/file-icons/*.svg, src/lib/materialIcons.js, src/components/FileIcon.vue
+
+Project : material-icon-theme
+Source  : https://github.com/material-extensions/vscode-material-icon-theme
+License : MIT License
+Copyright (c) 2025 Material Extensions
+
+The MIT License grants permission to use, copy, modify, and distribute the
+software. Full license text: src/assets/file-icons/LICENSE

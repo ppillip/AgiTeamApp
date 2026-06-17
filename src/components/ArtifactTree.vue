@@ -1,20 +1,26 @@
 <script>
 import Icon from "./Icon.vue";
+import FileIcon from "./FileIcon.vue";
 import { store, toggleFolder, childrenOf, openFile, openContextMenu } from "../stores/monitor.js";
 import { folderHasUnseenChange } from "../stores/artifactChange.js";
+
+// 트리 파일/폴더 아이콘을 Material Icon Theme(컬러)로 렌더할지 스위치(롤백 대비).
+//   true=Material 컬러 아이콘(FileIcon), false=기존 Lucide 라인 아이콘. 둘 다 코드 보존.
+const USE_MATERIAL_ICONS = true;
 
 // 산출물 트리 노드 (S-04, WG-ART-01) — 재귀 컴포넌트.
 //  - 폴더: 클릭 → 펼침/접힘(lazy 로드). 파일: 클릭 → 뷰어(S-05) 로드.
 //  - depth 만큼 들여쓰기. children 은 store 캐시(childrenCache) 또는 node.children.
 export default {
   name: "ArtifactTree",
-  components: { Icon },
+  components: { Icon, FileIcon },
   props: {
     node: { type: Object, required: true },
     depth: { type: Number, default: 0 },
   },
   computed: {
     store: () => store,
+    useMaterial: () => USE_MATERIAL_ICONS,
     isOpen() {
       return !!store.expanded[this.node.path];
     },
@@ -83,11 +89,15 @@ export default {
     >
       <template v-if="node.isDir">
         <Icon :name="isOpen ? 'chevronDown' : 'chevronRight'" :size="14" class="flex-shrink-0 text-ink-500" />
-        <Icon name="folder" :size="15" class="flex-shrink-0" :class="highlighted || markUnseen ? 'text-amber' : 'text-ink-300'" />
+        <!-- 폴더 아이콘: Material(컬러, 열림/닫힘·폴더명별) ↔ 기존 Lucide(스위치) -->
+        <FileIcon v-if="useMaterial" :is-dir="true" :is-open="isOpen" :name="node.name" :size="16" />
+        <Icon v-else name="folder" :size="15" class="flex-shrink-0" :class="highlighted || markUnseen ? 'text-amber' : 'text-ink-300'" />
       </template>
       <template v-else>
         <span class="w-3.5 flex-shrink-0"></span>
-        <Icon name="file" :size="15" class="flex-shrink-0" :class="highlighted || markUnseen ? 'text-amber' : 'text-ink-300'" />
+        <!-- 파일 아이콘: Material(확장자별 컬러) ↔ 기존 Lucide(스위치) -->
+        <FileIcon v-if="useMaterial" :name="node.name" :ext="node.ext" :size="16" />
+        <Icon v-else name="file" :size="15" class="flex-shrink-0" :class="highlighted || markUnseen ? 'text-amber' : 'text-ink-300'" />
       </template>
       <span
         class="truncate"
