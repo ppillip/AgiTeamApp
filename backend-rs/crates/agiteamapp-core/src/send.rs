@@ -22,8 +22,8 @@ pub struct PmTarget {
 
 /// cmux 멀티플렉서 포트 (outbound). agiteamapp-mux 가 구현.
 pub trait MuxPort: Send + Sync {
-    /// PM surface 동적 해소. 미연결이면 None.
-    async fn resolve_pm(&self, project_id: &str) -> Result<Option<PmTarget>, ApiError>;
+    /// 역할 surface 동적 해소(PM 포함 임의 역할). 미연결이면 None.
+    async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError>;
     /// read-screen 핑으로 liveness 확정.
     async fn ping(&self, target: &PmTarget) -> bool;
     /// 텍스트 제출(입력+Enter). 제출 성공 여부 반환.
@@ -38,6 +38,10 @@ pub struct SendMessageRequest {
     pub project_id: Option<String>,
     #[serde(default)]
     pub client_message_id: Option<String>,
+    // 송신 대상 역할. 미지정 시 PM(기존 계약 보존, FE 미사용 시 동작 불변).
+    // 지정 시 그 역할 surface 로 보내고 그 방에 즉시 기록(응답 실패해도 '보냄' 보존, #13).
+    #[serde(default)]
+    pub target_role: Option<String>,
     // 주: attachments 는 AttachmentService(첨부 묶음) 선행 필요 — B단계 텍스트 전송만(후속 TODO).
 }
 
@@ -65,20 +69,29 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
         return Err(ApiError::new("empty_message", 422, "Message text is empty."));
     }
 
-    // 1) PM surface 해소 (refresh-before-fail 은 adapter 내부 책임).
+    // 송신 대상 역할: 미지정 시 PM(기존 계약). 지정 시 해당 에이전트로 직접 전송.
+    let role = req
+        .target_role
+        .clone()
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| PM_ROLE_ID.to_string());
+    let room_type = if role == PM_ROLE_ID { "pm" } else { "role" };
+
+    // 1) 대상 역할 surface 해소 (refresh-before-fail 은 adapter 내부 책임).
     let target = mux
-        .resolve_pm(project_id)
+        .resolve_role(project_id, &role)
         .await?
         .ok_or_else(|| ApiError::new("surface_not_found", 409, "No active cmux surface for target role."))?;
 
     // 2) liveness 핑
     if !mux.ping(&target).await {
-        return Err(ApiError::new("surface_not_found", 409, "PM surface ping failed."));
+        return Err(ApiError::new("surface_not_found", 409, "Target surface ping failed."));
     }
 
-    // 3) PM 방 upsert
+    // 3) 대상 역할 방 upsert
     let room = repo
-        .upsert_room(project_id, PM_ROLE_ID, &target.display_name, "pm", None, None)
+        .upsert_room(project_id, &role, &target.display_name, room_type, None, None)
         .await?;
 
     // Python pm_bridge: outbound message.team_session_id = room.team_session_id (DV-41 provenance).
@@ -94,7 +107,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
             room_id: room.room_id.clone(),
             agent_session_id: None,
             correlation_id: Some(new_correlation_id.to_string()),
-            role_id: PM_ROLE_ID.to_string(),
+            role_id: role.clone(),
             surface_id: Some(target.surface_id.clone()),
             team_session_id: team_session.clone(),
             direction: "outbound".to_string(),
@@ -167,7 +180,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
         "correlation_id": new_correlation_id,
         "project_id": project_id,
         "room_id": room.room_id,
-        "role": PM_ROLE_ID,
+        "role": role,
         "surface_id": target.surface_id,
         "workspace_id": target.workspace_id,
         "agent_session_id": Value::Null,

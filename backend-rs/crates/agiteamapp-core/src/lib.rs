@@ -248,11 +248,12 @@ mod tests {
         submitted: bool,
     }
     impl MuxPort for FakeMux {
-        async fn resolve_pm(&self, _project_id: &str) -> Result<Option<PmTarget>, ApiError> {
+        async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError> {
             Ok(Some(PmTarget {
+                project_id: project_id.into(),
                 surface_id: "surface:dummy".into(),
                 workspace_id: Some("ws:1".into()),
-                display_name: "PM".into(),
+                display_name: role.into(),
             }))
         }
         async fn ping(&self, _t: &PmTarget) -> bool {

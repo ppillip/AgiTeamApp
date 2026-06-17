@@ -20,12 +20,12 @@ impl Default for DummyMux {
     }
 }
 impl MuxPort for DummyMux {
-    async fn resolve_pm(&self, project_id: &str) -> Result<Option<PmTarget>, ApiError> {
+    async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError> {
         Ok(Some(PmTarget {
             project_id: project_id.to_string(),
             surface_id: "surface:dummy".to_string(),
             workspace_id: None,
-            display_name: "PM".to_string(),
+            display_name: role.to_string(),
         }))
     }
     async fn ping(&self, _t: &PmTarget) -> bool {
@@ -81,9 +81,9 @@ impl CmuxAdapter {
             }
         }
     }
-    fn resolve_target(&self, project_id: &str) -> Option<PmTarget> {
+    fn resolve_target(&self, project_id: &str, role: &str) -> Option<PmTarget> {
         self.discovery.as_ref().and_then(|disc| {
-            disc.resolve(project_id, "PM")
+            disc.resolve(project_id, role)
                 .filter(|i| i.connection_state == "connected")
                 .map(|i| PmTarget {
                     project_id: project_id.to_string(),
@@ -96,16 +96,16 @@ impl CmuxAdapter {
 }
 
 impl MuxPort for CmuxAdapter {
-    async fn resolve_pm(&self, project_id: &str) -> Result<Option<PmTarget>, ApiError> {
+    async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError> {
         if self.discovery.is_some() {
             // ① 송신 직전 refresh (workspace-scoped 재해소, Python pm_bridge:181).
             self.refresh_discovery().await;
-            if let Some(t) = self.resolve_target(project_id) {
+            if let Some(t) = self.resolve_target(project_id, role) {
                 return Ok(Some(t));
             }
             // ② refresh-before-fail: 미해소면 1회 더 refresh 후 재시도 (QI-WG-023/DV-42).
             self.refresh_discovery().await;
-            return Ok(self.resolve_target(project_id));
+            return Ok(self.resolve_target(project_id, role));
         }
         Ok(None)
     }
@@ -248,10 +248,10 @@ pub enum MuxAdapter {
     Cmux(CmuxAdapter),
 }
 impl MuxPort for MuxAdapter {
-    async fn resolve_pm(&self, project_id: &str) -> Result<Option<PmTarget>, ApiError> {
+    async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError> {
         match self {
-            MuxAdapter::Dummy(m) => m.resolve_pm(project_id).await,
-            MuxAdapter::Cmux(m) => m.resolve_pm(project_id).await,
+            MuxAdapter::Dummy(m) => m.resolve_role(project_id, role).await,
+            MuxAdapter::Cmux(m) => m.resolve_role(project_id, role).await,
         }
     }
     async fn ping(&self, t: &PmTarget) -> bool {
