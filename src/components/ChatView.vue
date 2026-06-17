@@ -320,7 +320,7 @@ export default {
           </div>
 
           <!-- 메시지 -->
-          <div v-else :class="['flex gap-3', mobile ? 'max-w-[96%]' : 'max-w-[74%]', it.m.out ? 'ml-auto flex-row' : '']">
+          <div v-else :class="['flex gap-3', mobile ? 'max-w-[96%]' : (it.m.out ? 'max-w-[74%]' : 'max-w-[88%]'), it.m.out ? 'ml-auto flex-row' : '']">
             <!-- 받은(좌측) 아바타 -->
             <div
               v-if="!it.m.out"
