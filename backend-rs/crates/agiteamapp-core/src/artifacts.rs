@@ -461,6 +461,16 @@ impl ArtifactService {
             "html" => {
                 file["stream_url"] = json!(stream_url);
                 file["content_type"] = json!("text/html; charset=utf-8");
+                // 작은 html(<= max_inline_bytes)은 raw inline content 도 함께 싣는다.
+                // FE 뷰어가 stream_url(iframe src, BE CSP sandbox=default-src none)이 아니라
+                // srcdoc(content)+sandbox=allow-scripts 경로로 렌더 → mermaid 등 스크립트가 동작한다.
+                // sanitize 는 적용하지 않는다(스크립트 제거 시 mermaid 가 깨짐 — raw 보존). 대용량은
+                // inline 을 생략해 기존 stream 경로를 유지한다.
+                if size <= max_inline_bytes {
+                    file["content"] = json!(read_text(&rp.abs));
+                    file["encoding"] = json!("utf-8");
+                    file["sanitized"] = json!(false);
+                }
                 Ok((json!({ "file": file }), 200))
             }
             _ => {

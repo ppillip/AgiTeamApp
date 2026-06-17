@@ -107,6 +107,8 @@ pub struct NewMessage {
     pub raw_hash: Option<String>,
     pub status: String,
     pub occurred_at_iso: String,
+    // WG-MSG-06 첨부: 공개 attachments_json(말풍선용). 없으면 None → DB NULL.
+    pub attachments: Option<serde_json::Value>,
 }
 
 /// runtime_event 생성 입력.

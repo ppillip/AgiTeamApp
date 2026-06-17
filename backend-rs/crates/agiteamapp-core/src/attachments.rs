@@ -245,6 +245,46 @@ impl AttachmentService {
         Ok(self.public_dict(&meta))
     }
 
+    /// attachment_id → (abs_path, 공개메타 dict). project 소유·TTL·경로 검증.
+    /// 송신(send) 경로에서 절대경로(cmux 제출용)와 공개 attachments_json(말풍선용)을 함께 얻는다.
+    pub fn resolve_with_meta(
+        &self,
+        project_id: &str,
+        attachment_id: &str,
+        now_epoch: i64,
+    ) -> Result<(PathBuf, Value), ApiError> {
+        if !attachment_id.starts_with("att_") || attachment_id.len() > 64 {
+            return Err(aerr("attachment_not_found", 404));
+        }
+        let sidecar = self.store_dir.join(format!("{attachment_id}.json"));
+        if !sidecar.exists() {
+            return Err(aerr("attachment_not_found", 404));
+        }
+        let meta: Value = match fs::read(&sidecar).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+            Some(m) => m,
+            None => return Err(aerr("attachment_not_found", 404)),
+        };
+        if meta["project_id"].as_str() != Some(project_id) {
+            return Err(aerr("attachment_not_found", 404));
+        }
+        let expires = meta["expires_at"]
+            .as_i64()
+            .or_else(|| meta["expires_at"].as_str().and_then(iso_to_epoch))
+            .unwrap_or(0);
+        if expires <= now_epoch {
+            return Err(aerr("attachment_expired", 410));
+        }
+        let filename = meta["filename"].as_str().unwrap_or("");
+        if filename.contains('/') || filename.contains("..") {
+            return Err(aerr("attachment_not_found", 404));
+        }
+        let abs = self.store_dir.join(filename);
+        if !abs.exists() {
+            return Err(aerr("attachment_expired", 410));
+        }
+        Ok((abs, self.public_dict(&meta)))
+    }
+
     /// attachment_id → (abs_path, mime). project 소유·TTL·경로 검증.
     pub fn resolve(
         &self,

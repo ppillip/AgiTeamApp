@@ -69,6 +69,11 @@ export default {
       // 코드 에디터(CodeMirror): 단일 편집화면(렌더/수정 탭 없음). 현재 편집 내용 + dirty.
       codeContent: "",
       codeDirty: false,
+      // html 렌더용 raw 본문(회귀 복구): Rust 백엔드는 html 에 content 를 안 싣고 stream_url 만 준다.
+      // stream 경로로 iframe 을 띄우면 BE 가 'CSP: sandbox; default-src none' 을 강제해 스크립트(mermaid)가 막힌다.
+      // → html 인데 content 가 없으면 stream 을 직접 fetch 해 텍스트를 받아 srcdoc 으로 렌더한다(부모 CSP 없음 + allow-scripts → 스크립트 실행).
+      htmlRaw: null,
+      htmlRawLoading: false,
     };
     // 비반응 인스턴스 필드(아래 created 에서 초기화): this.crepe, this.editorBase
   },
@@ -131,9 +136,11 @@ export default {
       if (!this.file) return null;
       return fileStreamUrl(this.file.path, "original", store.selectedProjectId, store.rootType);
     },
-    // html content(raw)를 주면 srcdoc 으로 안전 렌더(추가 요청 없음). 없으면 stream 으로.
+    // html content(raw)를 주면 srcdoc 으로 안전 렌더. 백엔드가 content 를 안 주면(Rust) fetch 한 htmlRaw 로 폴백.
+    // 둘 다 없을 때만 null → stream(=CSP로 스크립트 차단) 으로 빠진다. mermaid 등 스크립트 html 은 항상 srcdoc 경로를 타야 한다.
     htmlSrcdoc() {
-      return this.mode === "html" ? this.file?.content ?? null : null;
+      if (this.mode !== "html") return null;
+      return this.file?.content ?? this.htmlRaw ?? null;
     },
     isImage() {
       return this.mode === "image";
@@ -155,10 +162,18 @@ export default {
       // 코드 에디터 상태 초기화(새 파일 내용 기준)
       this.codeContent = this.file?.content ?? "";
       this.codeDirty = false;
+      // html raw 폴백 상태 초기화 후 필요 시 로드
+      this.htmlRaw = null;
+      this.htmlRawLoading = false;
+      this.$nextTick(() => this.maybeLoadHtmlRaw());
     },
-    // 파일 내용이 외부 갱신(저장/외부수정 reload)되면 코드 baseline 동기화
+    // 파일 내용이 외부 갱신(저장/외부수정 reload)되면 코드 baseline 동기화 + html raw 재평가
     "store.viewer.file.content"() {
       if (this.isCode && !this.codeDirty) this.codeContent = this.file?.content ?? "";
+    },
+    // file 메타가 채워지면(path 직후 비동기 로드) html raw 폴백 로드
+    "store.viewer.file"() {
+      this.maybeLoadHtmlRaw();
     },
     // md 렌더 결과가 바뀌면 mermaid 다이어그램 변환(파일 전환·내용 갱신 포함)
     mdHtml() {
@@ -167,6 +182,7 @@ export default {
   },
   mounted() {
     this.renderMermaid();
+    this.maybeLoadHtmlRaw(); // 이미 html 이 열린 채 마운트된 경우 raw 폴백 로드
     // Ctrl/Cmd+S 저장 단축키(수정 모드일 때만 가로채 저장)
     window.addEventListener("keydown", this.onKeydown);
   },
@@ -176,6 +192,29 @@ export default {
   },
   methods: {
     closeViewer,
+    // html 인데 백엔드가 content 를 안 준 경우(Rust): stream 을 직접 fetch 해 raw 텍스트를 받아 srcdoc 으로 렌더.
+    // (stream 응답의 CSP 헤더는 'fetch 로 본문 읽기'엔 영향 없음 — 그 텍스트를 srcdoc 에 넣으면 부모 CSP(없음) 상속 + allow-scripts → mermaid 실행)
+    async maybeLoadHtmlRaw() {
+      if (this.mode !== "html") return;
+      const c = this.file?.content;
+      if (c != null && c !== "") return; // BE 가 content 를 주면 그대로 사용
+      if (this.htmlRaw != null || this.htmlRawLoading) return;
+      const url = this.streamUrl;
+      const path = this.file?.path;
+      if (!url) return;
+      this.htmlRawLoading = true;
+      const token = import.meta.env?.VITE_API_TOKEN || null;
+      try {
+        const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        if (!res.ok) throw new Error("stream " + res.status);
+        const text = await res.text();
+        if (store.viewer.path === path) this.htmlRaw = text; // 경합 방지: 그 사이 파일 전환 시 폐기
+      } catch (e) {
+        /* 실패 시 stream 폴백(스크립트 없이라도 표시 시도) */
+      } finally {
+        this.htmlRawLoading = false;
+      }
+    },
     // 렌더↔수정 탭 전환. 수정 진입 시 WYSIWYG 에디터 로드, 렌더 복귀 시 언마운트(요구사항).
     setMdTab(tab) {
       if (tab === this.mdTab) return;
@@ -497,19 +536,28 @@ export default {
         <!-- pdf -->
         <iframe v-else-if="mode === 'pdf_stream' && streamUrl" :src="streamUrl" class="h-full w-full border-0" title="PDF 미리보기"></iframe>
 
-        <!-- html: 샌드박스 iframe(스크립트 차단). content 있으면 srcdoc, 없으면 stream. 소스 모드는 raw 표시 -->
+        <!-- html: 항상 srcdoc 경로로 통일(인라인·크게보기 동일). stream(src) 폴백은 '제거'했다.
+             이유: stream 으로 iframe 을 띄우면 BE 가 'CSP: sandbox; default-src none' 을 강제해 스크립트(mermaid)가 막힌다.
+                   또 src↔srcdoc 전환 경합으로 인스턴스 마운트 타이밍에 따라(특히 '크게보기' 새 마운트) 깨지는 회귀가 있었다.
+             → html content(file.content) 또는 fetch 한 htmlRaw 가 준비됐을 때만 srcdoc 으로 렌더. 준비 전엔 placeholder.
+             sandbox='allow-scripts'(allow-same-origin 미포함): 산출물 html 스크립트를 '불투명 origin'에서 실행(부모 origin 격리).
+             srcdoc 문서는 부모 CSP 를 상속하는데 앱에 차단 CSP 가 없어 외부 CDN(jsdelivr mermaid) 로드도 허용된다. -->
         <template v-else-if="mode === 'html'">
-          <iframe
-            v-if="htmlMode === 'render'"
-            :srcdoc="htmlSrcdoc || undefined"
-            :src="htmlSrcdoc ? undefined : streamUrl"
-            sandbox="allow-same-origin"
-            referrerpolicy="no-referrer"
-            class="h-full w-full border-0 bg-white"
-            title="HTML 렌더(샌드박스)"
-          ></iframe>
+          <template v-if="htmlMode === 'render'">
+            <iframe
+              v-if="htmlSrcdoc"
+              :srcdoc="htmlSrcdoc"
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              class="h-full w-full border-0 bg-white"
+              title="HTML 렌더(샌드박스)"
+            ></iframe>
+            <div v-else class="flex h-full items-center justify-center text-[13px] text-ink-400">
+              {{ htmlRawLoading ? "미리보기 불러오는 중…" : "미리보기를 불러올 수 없습니다." }}
+            </div>
+          </template>
           <div v-else class="md-body h-full overflow-auto px-5 py-4 nice-scroll">
-            <pre class="md-pre whitespace-pre-wrap break-words">{{ file.content || "(소스를 불러올 수 없습니다 — 백엔드 raw 미지원)" }}</pre>
+            <pre class="md-pre whitespace-pre-wrap break-words">{{ file.content || htmlRaw || "(소스를 불러올 수 없습니다 — 백엔드 raw 미지원)" }}</pre>
           </div>
         </template>
 

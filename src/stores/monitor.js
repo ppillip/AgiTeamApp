@@ -652,6 +652,14 @@ export function clearExternalChange(path, root) {
   for (const k of staleAncestorKeys(m, path)) delete m[k];
 }
 
+// 특정 탭(root_type)의 외부변경(미열람) 표식을 '전부 읽음'으로 일괄 초기화.
+//   산출물 패널 새로고침(reload) 시 호출 — 트리 점/볼드/amber 강조를 한 번에 리셋한다.
+//   탭별 분리 유지: 인자 미지정 시 '현재 활성 탭'만 비우고 다른 탭 표식은 보존한다.
+export function clearAllExternalChanges(root) {
+  const r = normalizeRootType(root || store.rootType);
+  store.externalChanges[r] = {};
+}
+
 function applyArtifactChange(data) {
   if (store.degraded) return;
   // 변경이 속한 탭(root_type). BE 미동봉 시 documents 로 귀속(기존 동작 보존).
@@ -770,6 +778,19 @@ async function fullArtifactResync() {
 // ── 트리 컨텍스트 메뉴 / 토스트 (WG-ART-07) ──────────────────
 let _toastTimer = null;
 
+// 트리 노드 path 는 root_type 서브트리 루트 기준 상대경로(예: 'reports/foo.html')로,
+// 프로젝트 루트 하위 디렉터리명(prefix)이 빠져 있다. 경로 복사 시 BE 규약과 동일한 prefix 를 덧붙여
+// '프로젝트 루트 기준 상대경로'로 만든다. (BE config ROOT_TYPE_SUBDIR 와 일치: persona→brain)
+const ROOT_TYPE_PREFIX = { documents: "documents", system: "system", persona: "brain" };
+function projectRelPath(path, rootType) {
+  const rel = (path || "").replace(/^\/+/, ""); // 방어적 선행 슬래시 제거
+  if (!rel) return "";
+  const prefix = ROOT_TYPE_PREFIX[rootType] || "documents";
+  // 이미 prefix 가 붙어 있으면(방어적) 중복 부착 금지.
+  if (rel === prefix || rel.startsWith(prefix + "/")) return rel;
+  return `${prefix}/${rel}`;
+}
+
 // 짧은 피드백 토스트. 같은 토스트가 떠 있어도 새 메시지로 갱신 + 타이머 리셋.
 export function showToast(text, tone = "ok", ms = 1800) {
   store.toast = { show: true, text, tone };
@@ -788,10 +809,11 @@ export function closeContextMenu() {
   if (store.contextMenu.open) store.contextMenu = { open: false, x: 0, y: 0, node: null };
 }
 
-// 경로 복사: 대상 노드의 project-root 기준 상대경로를 클립보드로. navigator.clipboard 불가 시 폴백.
+// 경로 복사: 대상 노드의 '프로젝트 루트 기준 상대경로'(예: documents/reports/foo.html)를 클립보드로.
+//   절대경로/프로젝트명 미포함 — root_type prefix(documents|system|brain)만 덧붙인다.
 export async function copyArtifactPath(node) {
   closeContextMenu();
-  const path = node?.path || "";
+  const path = projectRelPath(node?.path, store.rootType);
   if (!path) return;
   let ok = false;
   try {

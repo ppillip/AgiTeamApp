@@ -151,6 +151,7 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
         raw_hash: Some(raw_hash),
         status,
         occurred_at_iso: req.occurred_at.clone(),
+        attachments: None,
     };
     let msg = repo.create_message(new_msg).await?;
     repo.touch_room_last_message(&room.room_id, &msg.message_id, &msg.occurred_at, is_inbound)

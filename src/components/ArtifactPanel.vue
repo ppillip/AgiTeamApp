@@ -4,7 +4,7 @@ import ArtifactTree from "./ArtifactTree.vue";
 import ArtifactViewer from "./ArtifactViewer.vue";
 import ArtifactContextMenu from "./ArtifactContextMenu.vue";
 import Toast from "./Toast.vue";
-import { store, loadTreeRoot, setRootType } from "../stores/monitor.js";
+import { store, loadTreeRoot, setRootType, clearAllExternalChanges } from "../stores/monitor.js";
 
 // 산출물 패널 상단 세그먼트 탭: 산출물(documents) ↔ 코드(system) ↔ 페르소나(persona, BE→brain).
 const ROOT_TABS = [
@@ -40,6 +40,7 @@ export default {
   },
   methods: {
     reload() {
+      clearAllExternalChanges(); // 현재 탭의 '안 읽은 파일' 표식(점/볼드/amber) 전부 읽음 처리
       loadTreeRoot();
     },
     selectTab(key) {

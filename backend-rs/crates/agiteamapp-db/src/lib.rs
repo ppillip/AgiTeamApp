@@ -323,9 +323,9 @@ impl WebguiRepository for PgRepository {
              (message_id, room_id, agent_session_id, correlation_id, role_id, surface_id, \
               team_session_id, direction, source, message_type, provider, transcript_path, \
               transcript_offset, transcript_record_id, raw_text, normalized_text, raw_hash, \
-              status, occurred_at) \
+              status, occurred_at, attachments_json) \
              VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-              $14, $15, $16, $17, $18, $19::timestamptz) \
+              $14, $15, $16, $17, $18, $19::timestamptz, $20::jsonb) \
              RETURNING {MSG_COLS}"
         );
         let row = sqlx::query(&sql)
@@ -348,6 +348,7 @@ impl WebguiRepository for PgRepository {
             .bind(&m.raw_hash)
             .bind(&m.status)
             .bind(&m.occurred_at_iso)
+            .bind(&m.attachments)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| RepoError(format!("create_message: {e}")))?;
@@ -368,9 +369,9 @@ impl WebguiRepository for PgRepository {
              (message_id, room_id, agent_session_id, correlation_id, role_id, surface_id, \
               team_session_id, direction, source, message_type, provider, transcript_path, \
               transcript_offset, transcript_record_id, raw_text, normalized_text, raw_hash, \
-              status, occurred_at) \
+              status, occurred_at, attachments_json) \
              VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-              $14, $15, $16, $17, $18, $19::timestamptz) \
+              $14, $15, $16, $17, $18, $19::timestamptz, $20::jsonb) \
              ON CONFLICT (provider, transcript_record_id) \
               WHERE transcript_record_id IS NOT NULL DO NOTHING \
              RETURNING {MSG_COLS}"
@@ -395,6 +396,7 @@ impl WebguiRepository for PgRepository {
             .bind(&m.raw_hash)
             .bind(&m.status)
             .bind(&m.occurred_at_iso)
+            .bind(&m.attachments)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| RepoError(format!("create_message_on_conflict_skip: {e}")))?;

@@ -5,10 +5,37 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::attachments::AttachmentService;
 use crate::events::EventPublisher;
 use crate::repo::{ApiError, NewEvent, NewMessage, WebguiRepository};
 
 pub const PM_ROLE_ID: &str = "PM";
+
+/// FE body.attachments 항목 (사전 업로드된 attachment_id 참조, 순서 보존).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AttachmentRef {
+    pub attachment_id: String,
+}
+
+/// cmux 제출 텍스트 합성. PM(Claude Code)이 첨부 이미지를 실제로 읽을 수 있도록
+/// 제출 텍스트에 첨부 이미지의 '절대 파일경로'를 함께 싣는다.
+/// 형식: (사용자 텍스트 있으면 그 텍스트) + `[첨부 이미지 N개]` 헤더 + 절대경로 N줄(순서 보존).
+/// 첨부 없으면 user_text 를 그대로 반환(기존 동작 불변).
+pub fn compose_submit_text(user_text: &str, abs_paths: &[String]) -> String {
+    let text = user_text.trim();
+    if abs_paths.is_empty() {
+        return text.to_string();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    if !text.is_empty() {
+        lines.push(text.to_string());
+    }
+    lines.push(format!("[첨부 이미지 {}개]", abs_paths.len()));
+    for p in abs_paths {
+        lines.push(p.clone());
+    }
+    lines.join("\n")
+}
 
 /// PM surface 해소 결과.
 #[derive(Debug, Clone)]
@@ -42,7 +69,9 @@ pub struct SendMessageRequest {
     // 지정 시 그 역할 surface 로 보내고 그 방에 즉시 기록(응답 실패해도 '보냄' 보존, #13).
     #[serde(default)]
     pub target_role: Option<String>,
-    // 주: attachments 는 AttachmentService(첨부 묶음) 선행 필요 — B단계 텍스트 전송만(후속 TODO).
+    // WG-MSG-06 첨부: 사전 업로드한 [{attachment_id}] (순서 보존). 있으면 빈 텍스트 허용(DS-40 §7.5).
+    #[serde(default)]
+    pub attachments: Vec<AttachmentRef>,
 }
 
 fn provenance_pm_bridge() -> Value {
@@ -56,6 +85,7 @@ fn provenance_pm_bridge() -> Value {
 }
 
 /// 송신: PM 해소→핑→방 upsert→pending 선저장→cmux submit→status/event→WS publish.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
     repo: &R,
     mux: &M,
@@ -63,10 +93,37 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
     project_id: &str,
     new_correlation_id: &str,
     req: SendMessageRequest,
+    // WG-MSG-06: 첨부 해소용(절대경로·공개메타). http 가 project_root 로 생성해 주입. 첨부 없으면 미사용.
+    attachment_service: Option<&AttachmentService>,
+    now_epoch: i64,
 ) -> Result<Value, ApiError> {
     let clean = req.text.trim().to_string();
-    if clean.is_empty() {
+
+    // WG-MSG-06: 첨부 ID(순서 보존). 첨부가 있으면 빈 텍스트 허용(DS-40 §7.5).
+    let attachment_ids: Vec<String> = req
+        .attachments
+        .iter()
+        .map(|a| a.attachment_id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    // 빈텍스트 가드 완화: 텍스트도 없고 AND 첨부도 없을 때만 422.
+    if clean.is_empty() && attachment_ids.is_empty() {
         return Err(ApiError::new("empty_message", 422, "Message text is empty."));
+    }
+
+    // 첨부 절대경로 해소(부분송신 금지: 하나라도 만료/없음이면 전체 실패, §5.4.6).
+    // 공개 attachments_json(말풍선용)과 cmux 제출용 절대경로를 분리 수집한다.
+    let mut resolved_abs_paths: Vec<String> = Vec::new();
+    let mut public_attachments: Vec<Value> = Vec::new();
+    if !attachment_ids.is_empty() {
+        let svc = attachment_service.ok_or_else(|| {
+            ApiError::new("attachment_unavailable", 500, "Attachment service unavailable.")
+        })?;
+        for aid in &attachment_ids {
+            let (abs, public) = svc.resolve_with_meta(project_id, aid, now_epoch)?;
+            resolved_abs_paths.push(abs.to_string_lossy().to_string());
+            public_attachments.push(public);
+        }
     }
 
     // 송신 대상 역할: 미지정 시 PM(기존 계약). 지정 시 해당 에이전트로 직접 전송.
@@ -122,11 +179,26 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
             raw_hash: None, // Python outbound 정합 (dedup 비대상)
             status: "pending".to_string(),
             occurred_at_iso: repo.server_now().await?,
+            // 공개 attachments_json(말풍선용). 첨부 없으면 None → DB NULL.
+            attachments: if public_attachments.is_empty() {
+                None
+            } else {
+                Some(json!(public_attachments))
+            },
         })
         .await?;
 
-    // 5) cmux submit (DB 트랜잭션 밖)
-    let submitted = mux.submit(&target, &clean).await.unwrap_or(false);
+    // 5) cmux submit (DB 트랜잭션 밖). 첨부 있으면 본문 뒤에 절대경로 블록을 합성해
+    //    PM(Claude Code)이 그 경로를 Read 로 열어 이미지를 확인할 수 있게 한다.
+    let submit_text = compose_submit_text(&clean, &resolved_abs_paths);
+    if !resolved_abs_paths.is_empty() {
+        // 운영 진단: cmux 제출 텍스트에 첨부 절대경로가 실제 포함됐는지 확인.
+        eprintln!(
+            "[send] attachments={} cmux submit_text={submit_text:?}",
+            resolved_abs_paths.len()
+        );
+    }
+    let submitted = mux.submit(&target, &submit_text).await.unwrap_or(false);
     let status = if submitted { "sent" } else { "failed" };
 
     // 6) status 반영 + cmux_send_result event + last_message touch

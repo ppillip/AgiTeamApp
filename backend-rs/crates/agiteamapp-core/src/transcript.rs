@@ -325,6 +325,7 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
                 raw_hash: Some(raw_hash),
                 status: status.clone(),
                 occurred_at_iso: occurred,
+                attachments: None,
             })
             .await?;
         let Some(msg) = inserted else {

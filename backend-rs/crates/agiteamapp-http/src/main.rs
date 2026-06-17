@@ -373,6 +373,9 @@ async fn message_send(
         .or_else(|| s.selected_project.clone())
         .unwrap_or_else(|| "AgiTeamApp".to_string());
     let correlation_id = uuid::Uuid::new_v4().to_string();
+    // WG-MSG-06: 첨부 해소용 AttachmentService(project_root 기준) + 만료판정 기준시각.
+    let att_svc =
+        agiteamapp_core::AttachmentService::new(&project_root(&s.projects_base, &pid));
     match send_message(
         s.repo.as_ref(),
         s.mux.as_ref(),
@@ -380,6 +383,8 @@ async fn message_send(
         &pid,
         &correlation_id,
         req,
+        Some(&att_svc),
+        now_epoch(),
     )
     .await
     {
