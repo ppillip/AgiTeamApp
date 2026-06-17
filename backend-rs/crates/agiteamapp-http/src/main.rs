@@ -1,6 +1,8 @@
 //! agiteamapp-http — axum adapter. 라우팅·핸들러는 core usecase 를 호출만 한다.
 //! DB 구현은 agiteamapp-db(PgRepository), WS fanout 은 broadcast 기반 WsHub 로 주입.
 
+mod supervisor;
+
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -1173,6 +1175,10 @@ async fn main() {
         );
     }
 
+    // supervisor 설정 구성용으로 state move 전에 클론 보존(아래 AppState 로 원본 이동됨).
+    let projects_base_for_poller = projects_base.clone();
+    let project_id_for_poller = selected_project.clone().unwrap_or_else(|| "Panthea".to_string());
+
     let state = AppState {
         repo: Arc::new(repo),
         activity: Arc::new(ActivityRegistry::new()),
@@ -1261,5 +1267,55 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind failed");
     println!("agiteamapp-http listening on http://{addr} (db={database_url})");
-    axum::serve(listener, app(state)).await.expect("serve failed");
+
+    // ACT-POL-03: PollerFaster-rs child supervisor (방안 2). 기동 순서상 listen 이후 spawn.
+    // AGITEAMAPP_ACTIVITY_POLLER_MODE=supervised 일 때만 활성(끄면 현행 수동 실행으로 롤백).
+    // shutdown_tx 로 서버 종료를 supervisor 에 전파 → child SIGTERM 후 wait(orphan 금지).
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let collector_token_for_poller =
+        std::env::var("AGITEAMAPP_COLLECTOR_TOKEN").ok().filter(|s| !s.is_empty());
+    let supervisor_handle = match supervisor::SupervisorConfig::from_env(
+        &projects_base_for_poller,
+        &project_id_for_poller,
+        port,
+        collector_token_for_poller,
+    ) {
+        Some(cfg) => Some(tokio::spawn(supervisor::run(cfg, shutdown_rx))),
+        None => None,
+    };
+
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(shutdown_signal(shutdown_tx.clone()))
+        .await
+        .expect("serve failed");
+
+    // serve 종료(graceful) 후 supervisor 에도 종료 전파하고 child 정리를 기다린다.
+    let _ = shutdown_tx.send(true);
+    if let Some(handle) = supervisor_handle {
+        let _ = handle.await;
+    }
+}
+
+/// Ctrl-C 또는 SIGTERM 수신 시 graceful shutdown 시작 + supervisor 에 종료 전파.
+async fn shutdown_signal(shutdown_tx: tokio::sync::watch::Sender<bool>) {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut sig) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            sig.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = term => {}
+    }
+    eprintln!("[shutdown] 종료 시그널 수신 → graceful shutdown");
+    let _ = shutdown_tx.send(true);
 }

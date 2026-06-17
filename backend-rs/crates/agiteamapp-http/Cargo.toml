@@ -15,3 +15,5 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
 notify = "6"
+# ACT-POL-03 supervisor: child(PollerFaster-rs) 에 SIGTERM 전파(graceful), pid liveness 점검.
+libc = "0.2"
