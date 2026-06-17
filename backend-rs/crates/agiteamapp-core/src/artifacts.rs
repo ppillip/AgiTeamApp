@@ -500,6 +500,110 @@ impl ArtifactService {
         Ok(json!({ "saved": true, "path": rp.rel }))
     }
 
+    /// 산출물 파일 삭제 (WG-ART-07, 휴지통식). 보안: resolve 게이트(제어문자·드라이브·절대·`..`·
+    /// secret/hidden·within-root 검증)를 그대로 통과한 뒤, 추가로 루트 자체/심볼릭/디렉토리를
+    /// 거부한다. 허용된 산출물 루트(documents/system/brain) 안의 '파일'만 삭제 가능.
+    ///
+    /// 동작:
+    ///  - 경로에 `_archive` 세그먼트가 있는 파일(=이미 휴지통 내부) → **영구 삭제**(중첩 백업 방지).
+    ///  - 그 외 일반 산출물 → 같은 폴더의 `_archive/` 에 백업 복사(없으면 생성) **성공 후** 원본 삭제.
+    ///    백업 파일명: `<확장자뺀이름>_<timestamp>.<원본확장자>` (예: foo_v0.2.html → foo_v0.2_<ts>.html).
+    ///    복사 실패 시 원본을 삭제하지 않고 에러 반환(데이터 보존 우선).
+    ///
+    /// `timestamp`: 백업명에 박을 YYYYMMDDhhmmss(호출측이 로컬시각으로 생성). 숫자 외 문자는 방어적으로 제거.
+    pub fn delete_file(&self, raw_path: &str, timestamp: &str) -> Result<Value, ApiError> {
+        let rp = self.resolve(Some(raw_path))?;
+        // 루트 자체 삭제 금지(빈 경로/".").
+        if rp.rel.is_empty() {
+            return Err(err("path_forbidden", 403, "Cannot delete the root directory."));
+        }
+        // 심볼릭 링크 거부: resolve 는 canonicalize 로 '타겟'을 가리키므로, 링크 자체를
+        // lexical 경로로 재확인해 링크 경유 타겟 삭제를 차단한다(심볼릭 escape 방어).
+        let lexical = self.root.join(&rp.rel);
+        if lexical
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(err("symlink_forbidden", 403, "Symbolic links are not allowed."));
+        }
+        if !rp.abs.exists() {
+            return Err(err("artifact_path_not_found", 404, "Artifact path not found."));
+        }
+        if rp.abs.is_dir() {
+            // 디렉토리 일괄 삭제는 위험 → 거부(파일 단위만 허용).
+            return Err(err("not_file", 422, "Target is a directory, not a file."));
+        }
+
+        // 이미 _archive 내부 파일이면 백업 없이 영구 삭제(무한 중첩 방지).
+        let in_archive = rp.rel.split('/').any(|seg| seg == "_archive");
+        if in_archive {
+            fs::remove_file(&rp.abs)
+                .map_err(|_| err("artifact_delete_failed", 500, "Failed to delete artifact."))?;
+            return Ok(json!({
+                "deleted": true,
+                "permanent": true,
+                "archived": false,
+                "path": rp.rel,
+                "archive_path": Value::Null,
+            }));
+        }
+
+        // --- 휴지통식: _archive 백업 복사 후 원본 삭제 ---
+        let file_name = rp
+            .abs
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        // <stem>_<ts>.<ext> (확장자 없으면 <stem>_<ts>). 확장자는 보존.
+        let ts: String = timestamp.chars().filter(|c| c.is_ascii_digit()).collect();
+        let (stem, ext) = match file_name.rsplit_once('.') {
+            // 선행 점 없는 정상 확장자만 분리(.gitignore 같은 숨김은 resolve 가 이미 차단).
+            Some((s, e)) if !s.is_empty() && !e.is_empty() => (s.to_string(), Some(e.to_string())),
+            _ => (file_name.clone(), None),
+        };
+        let backup_name = match &ext {
+            Some(e) => format!("{stem}_{ts}.{e}"),
+            None => format!("{stem}_{ts}"),
+        };
+
+        let parent_abs = rp
+            .abs
+            .parent()
+            .ok_or_else(|| err("artifact_delete_failed", 500, "Failed to resolve parent."))?;
+        let archive_dir = parent_abs.join("_archive");
+        fs::create_dir_all(&archive_dir)
+            .map_err(|_| err("artifact_archive_failed", 500, "Failed to create archive folder."))?;
+        let backup_abs = archive_dir.join(&backup_name);
+
+        // 복사 먼저. 실패하면 원본 보존(삭제 안 함).
+        fs::copy(&rp.abs, &backup_abs).map_err(|_| {
+            err("artifact_archive_failed", 500, "Failed to back up before delete.")
+        })?;
+        // 복사 성공 → 원본 삭제. 삭제 실패해도 백업은 남는다.
+        fs::remove_file(&rp.abs)
+            .map_err(|_| err("artifact_delete_failed", 500, "Failed to delete artifact."))?;
+
+        // 백업 상대경로(루트 기준): <부모rel>/_archive/<backup_name>.
+        let parent_rel = match rp.rel.rsplit_once('/') {
+            Some((p, _)) => p.to_string(),
+            None => String::new(),
+        };
+        let archive_rel = if parent_rel.is_empty() {
+            format!("_archive/{backup_name}")
+        } else {
+            format!("{parent_rel}/_archive/{backup_name}")
+        };
+
+        Ok(json!({
+            "deleted": true,
+            "permanent": false,
+            "archived": true,
+            "path": rp.rel,
+            "archive_path": archive_rel,
+        }))
+    }
+
     /// open_stream → (abs_path, mime, size). http 가 range 스트리밍.
     pub fn open_stream(&self, raw_path: &str) -> Result<(PathBuf, String, u64), ApiError> {
         let rp = self.resolve(Some(raw_path))?;

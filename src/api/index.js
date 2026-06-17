@@ -129,6 +129,19 @@ export async function writeFile(path, content, { projectId, rootType } = {}) {
   return { file: data?.file ? adaptFile(data.file) : null, raw: data };
 }
 
+// WG-ART-07(제안) — 산출물/코드/페르소나 파일 삭제. 불칸 계약(제안): POST /api/webgui/artifacts/delete
+//   body: { project_id, root_type, path }. path 는 선택 프로젝트 root 기준 상대경로.
+//   ⚠ BE 필수: 경로검증(traversal 차단, root 밖 거부) 후 삭제. 성공 시 { ok:true } (또는 { deleted:path }).
+//   백엔드 미구현 시 404/405 → 호출부가 토스트로 "삭제 API 미구현" 안내(앱은 죽지 않음).
+export async function deleteFile(path, { projectId, rootType } = {}) {
+  const data = await http.post(`${P}/artifacts/delete`, {
+    project_id: projectId || undefined,
+    root_type: rootType || undefined,
+    path,
+  });
+  return data;
+}
+
 // WG-ART-03 — 스트림 URL (pdf iframe/embed 용, 선택 프로젝트 기준)
 export function fileStreamUrl(path, variant = "original", projectId, rootType) {
   return apiUrl(`${P}/artifacts/file/stream`, {

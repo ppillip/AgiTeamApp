@@ -1,6 +1,6 @@
 <script>
 import Icon from "./Icon.vue";
-import { store, toggleFolder, childrenOf, openFile } from "../stores/monitor.js";
+import { store, toggleFolder, childrenOf, openFile, openContextMenu } from "../stores/monitor.js";
 import { folderHasUnseenChange } from "../stores/artifactChange.js";
 
 // 산출물 트리 노드 (S-04, WG-ART-01) — 재귀 컴포넌트.
@@ -27,6 +27,15 @@ export default {
     selected() {
       return store.viewer.path === this.node.path;
     },
+    // 우클릭 컨텍스트 메뉴가 이 노드를 대상으로 열려 있는지(VSCode식 활성 하이라이트).
+    //   메뉴가 닫히면 false → 직전 선택 상태로 자연 복귀.
+    contextActive() {
+      return store.contextMenu.open && store.contextMenu.node?.path === this.node.path;
+    },
+    // 좌클릭 선택 + 우클릭 활성 = 동일 배경 하이라이트.
+    highlighted() {
+      return this.selected || this.contextActive;
+    },
     // 현재 활성 탭(root_type)의 외부변경 맵. 트리는 항상 활성 탭 트리이므로 그 탭의 표식만 본다.
     rootChanges() {
       return store.externalChanges[store.rootType] || {};
@@ -51,6 +60,10 @@ export default {
       if (this.node.isDir) toggleFolder(this.node);
       else openFile(this.node);
     },
+    // 우클릭(WG-ART-07): 컨텍스트 메뉴 열기. 브라우저 기본 메뉴는 막는다.
+    onContextMenu(e) {
+      openContextMenu(this.node, e.clientX, e.clientY);
+    },
     extBadge(ext) {
       return (ext || "").toUpperCase();
     },
@@ -62,21 +75,23 @@ export default {
   <div>
     <button
       @click="onClick"
+      @contextmenu.prevent="onContextMenu"
       :class="['flex w-full items-center gap-[7px] rounded-[9px] px-2 py-[7px] text-left text-[13.5px]',
-               selected ? 'bg-amber-tint font-semibold text-amber-600' : 'text-ink-700 hover:bg-[#F4F4F6]']"
+               highlighted ? 'bg-amber-tint font-semibold text-amber-600' : 'text-ink-700 hover:bg-[#F4F4F6]',
+               contextActive && !selected ? 'ring-1 ring-inset ring-amber/45' : '']"
       :style="{ paddingLeft: (8 + depth * 14) + 'px' }"
     >
       <template v-if="node.isDir">
         <Icon :name="isOpen ? 'chevronDown' : 'chevronRight'" :size="14" class="flex-shrink-0 text-ink-500" />
-        <Icon name="folder" :size="15" class="flex-shrink-0" :class="selected || markUnseen ? 'text-amber' : 'text-ink-300'" />
+        <Icon name="folder" :size="15" class="flex-shrink-0" :class="highlighted || markUnseen ? 'text-amber' : 'text-ink-300'" />
       </template>
       <template v-else>
         <span class="w-3.5 flex-shrink-0"></span>
-        <Icon name="file" :size="15" class="flex-shrink-0" :class="selected || markUnseen ? 'text-amber' : 'text-ink-300'" />
+        <Icon name="file" :size="15" class="flex-shrink-0" :class="highlighted || markUnseen ? 'text-amber' : 'text-ink-300'" />
       </template>
       <span
         class="truncate"
-        :class="markUnseen && !selected ? 'font-semibold text-amber-600' : ''"
+        :class="markUnseen && !highlighted ? 'font-semibold text-amber-600' : ''"
       >{{ node.name }}</span>
       <!-- 미열람 변경 표식 점(amber). 파일=자신 변경 / 폴더=하위 변경 전파(UI-10).
            후행 그룹(점+배지)을 우측으로 미는 ml-auto 담당. -->

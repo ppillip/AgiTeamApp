@@ -238,6 +238,9 @@ export function adaptMessage(m) {
     failed: m.status === "failed",
     unmatched: m.status === "unmatched" || m.message_type === "unmatched",
     degraded,
+    // 시스템 메시지(불칸 분류 확정): PM transcript 의 시스템 알림(task-notification류).
+    //   source==='transcript' && message_type==='status'. direction inbound → 좌측 + '시스템 형식' 렌더(접힘 기본).
+    isSystem: source === "transcript" && m.message_type === "status",
     // 이미지 첨부(DV-91): 순서 보존. preview_url 만 노출(호스트 절대경로 없음).
     attachments: Array.isArray(m.attachments) ? m.attachments.map(adaptAttachment).filter(Boolean) : [],
   };

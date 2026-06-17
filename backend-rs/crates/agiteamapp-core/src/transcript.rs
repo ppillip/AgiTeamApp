@@ -16,6 +16,69 @@ fn canonical_text(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// --- 시스템 알림 분리 (모니터: 시스템 텍스트를 '유저 말풍선'에서 분리) -----------
+// Claude harness 가 user turn 에 주입하는 시스템 알림 블록. 이런 블록'만'으로 이뤄진
+// user turn 은 유저 발화가 아니라 시스템 메시지(좌측·status)로 분류한다. 실제 유저
+// 텍스트가 함께 있으면 유저 발화로 보존(원본 그대로 user_message 유지).
+const SYS_PAIRED_MARKERS: &[(&str, &str)] = &[
+    ("<task-notification>", "</task-notification>"),
+    ("<system-reminder>", "</system-reminder>"),
+];
+const SYS_NOTICE_MARKER: &str = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
+
+/// open..close (양끝 포함) 구간을 비탐욕적으로 모두 제거. close 가 없으면(미완 블록)
+/// open 이후 전부 제거(잘린 시스템 블록도 시스템으로 취급).
+fn remove_paired(s: &str, open: &str, close: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    loop {
+        match rest.find(open) {
+            Some(i) => {
+                out.push_str(&rest[..i]);
+                let after_open = &rest[i + open.len()..];
+                match after_open.find(close) {
+                    Some(j) => rest = &after_open[j + close.len()..],
+                    None => break, // close 없음 → 이후 전부 제거
+                }
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// user turn 텍스트가 '시스템 알림 블록으로만' 구성됐는지 판별.
+/// - Some(표시용텍스트): 시스템 알림 전용 turn → 시스템 메시지로 분류(래퍼 태그 토큰 제거 본문).
+/// - None: 실제 유저 텍스트가 섞였거나 마커가 없음 → 일반 유저 발화로 보존.
+pub fn classify_system_notification(text: &str) -> Option<String> {
+    let has_marker = SYS_PAIRED_MARKERS.iter().any(|(o, _)| text.contains(o))
+        || text.contains(SYS_NOTICE_MARKER);
+    if !has_marker {
+        return None;
+    }
+    // 페어 블록 제거 후 남는 실텍스트 판정.
+    let mut leftover = text.to_string();
+    for (open, close) in SYS_PAIRED_MARKERS {
+        leftover = remove_paired(&leftover, open, close);
+    }
+    let trimmed = leftover.trim();
+    // 남은 게 없거나, 남은 게 unpaired 시스템 공지 마커로 시작하면 '시스템 전용 turn'.
+    let is_pure = trimmed.is_empty() || trimmed.starts_with(SYS_NOTICE_MARKER);
+    if !is_pure {
+        return None; // 실제 유저 텍스트 공존 → 유저 발화 보존
+    }
+    // 표시용: 래퍼 XML 태그 토큰만 제거하고 본문은 유지(FE 가 시스템 형식으로 렌더).
+    let mut display = text.to_string();
+    for (open, close) in SYS_PAIRED_MARKERS {
+        display = display.replace(open, "").replace(close, "");
+    }
+    let display = display.trim().to_string();
+    Some(if display.is_empty() { text.trim().to_string() } else { display })
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscriptRecord {
     pub provider: String,
@@ -167,7 +230,24 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
             continue;
         }
         let is_assistant = rec.kind == "assistant_message";
-        let direction = if is_assistant { "inbound" } else { "outbound" };
+
+        // 시스템 알림 분리: user turn 이 시스템 알림 블록으로만 구성되면 좌측 시스템 메시지로.
+        //  - is_system=true → direction=inbound(좌측), message_type=status, assistant correlation/dedup 미적용.
+        //  - effective_text = 래퍼 태그 제거 본문(표시·해시 기준). 일반 메시지는 원본 그대로.
+        let system_display = if is_assistant {
+            None
+        } else {
+            classify_system_notification(text)
+        };
+        let is_system = system_display.is_some();
+        let inbound_like = is_assistant || is_system;
+        let effective_text: String = system_display.unwrap_or_else(|| text.to_string());
+        let text = effective_text.as_str();
+        if text.is_empty() {
+            continue;
+        }
+
+        let direction = if inbound_like { "inbound" } else { "outbound" };
         let raw_hash = compute_raw_hash(Some(&rec.provider), rec.record_id.as_deref(), role, text);
 
         // dedup (P2):
@@ -182,7 +262,8 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         // bridge-dup: user(outbound) record 가 WebGUI 선저장 outbound(webgui/pm_bridge)와
         // 같은 canonical text 면 중복 → skip (Python _find_outbound_text_dup 정합).
         // WebGUI 송신(SENT) + 그 입력의 transcript 수집(LIVE) 2건 저장 방지.
-        if !is_assistant {
+        // 시스템 메시지(is_system)는 outbound 가 아니므로 이 체크 대상 아님.
+        if !is_assistant && !is_system {
             let canon = canonical_text(text);
             if !canon.is_empty()
                 && repo.find_outbound_text_dup(room_id, &canon).await?.is_some()
@@ -192,8 +273,21 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         }
 
         let mut correlation_id: Option<String> = None;
-        let mut status = if is_assistant { "received" } else { "sent" }.to_string();
-        let mut message_type = rec.kind.clone();
+        // 시스템 메시지: status=received(중립 inbound), message_type=status(DB CHECK 정식값).
+        //   DB ck_webgui_message_type 은 'system' 을 불허 → 시스템류 정식값 'status' 채택.
+        let mut status = if is_system {
+            "received".to_string()
+        } else if is_assistant {
+            "received".to_string()
+        } else {
+            "sent".to_string()
+        };
+        let mut message_type = if is_system {
+            "status".to_string()
+        } else {
+            rec.kind.clone()
+        };
+        // assistant 만 outbound correlation 매칭. 시스템 메시지는 correlation/dedup 로직 미적용.
         if is_assistant {
             match repo.find_open_outbound_correlation(room_id).await? {
                 Some(cid) => correlation_id = Some(cid),
@@ -246,7 +340,8 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
                 "update_id": format!("message:{}", msg.message_id),
                 "room_id": room_id,
                 "correlation_id": correlation_id,
-                "update_type": if is_assistant { "message_received" } else { "message_sent" },
+                // 시스템 메시지도 좌측(inbound) 수신 이벤트로 fanout.
+                "update_type": if inbound_like { "message_received" } else { "message_sent" },
                 "message": crate::message::message_to_dict(&msg, project_id, Some("websocket")),
                 "event": Value::Null,
                 "occurred_at": msg.occurred_at,
@@ -256,8 +351,9 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         // 운영 진단: hook 즉시 경로의 WS publish 발생 여부 확인용(느림 진단).
         // 이 로그가 보이면 hook→store→publish 정상; 안 보이면 hook 미수신/transcript_path read 실패.
         eprintln!(
-            "[transcript:publish] room={room_id} project={project_id} type={} stored",
-            if is_assistant { "message_received" } else { "message_sent" }
+            "[transcript:publish] room={room_id} project={project_id} type={} mtype={message_type_dbg} stored",
+            if inbound_like { "message_received" } else { "message_sent" },
+            message_type_dbg = if is_system { "status" } else { rec.kind.as_str() }
         );
         stored += 1;
     }

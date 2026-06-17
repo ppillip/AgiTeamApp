@@ -38,7 +38,7 @@ export default {
   // thread 좌우 패딩을 줄여 좁은 화면 가용폭을 최대한 쓴다(데스크탑은 prop 미전달=false → 무변경).
   props: { mobile: { type: Boolean, default: false } },
   data() {
-    return { prevScrollHeight: null, dragOver: false };
+    return { prevScrollHeight: null, dragOver: false, expandedSystem: {} };
   },
   computed: {
     store: () => store,
@@ -135,6 +135,18 @@ export default {
       if (!canSend()) return;
       send();
       this.$nextTick(() => this.resetComposer());
+    },
+    // 시스템 메시지(불칸 분류): 기본 접힘. 헤더 클릭으로 펼침/접힘 토글.
+    isSystemExpanded(id) {
+      return !!this.expandedSystem[id];
+    },
+    toggleSystem(id) {
+      this.expandedSystem = { ...this.expandedSystem, [id]: !this.expandedSystem[id] };
+    },
+    // 접힘 요약: 본문 첫 비어있지 않은 줄(마크다운 기호 약간 정리) — 한 줄 미리보기.
+    systemSummary(text) {
+      const raw = (text || "").split("\n").map((l) => l.trim()).find((l) => l.length) || "시스템 알림";
+      return raw.replace(/^[#>*\-\s]+/, "").slice(0, 120);
     },
     // 말풍선/썸네일 src: 서버 preview_url 우선(self-contained), 없으면 로컬 blob(localUrl).
     attThumbSrc(att) {
@@ -317,6 +329,30 @@ export default {
             <span class="h-px flex-1 bg-line"></span>
             <span class="rounded-full border border-line bg-[#FAFAFB] px-2.5 py-0.5">새 세션 · {{ it.sessionId }}</span>
             <span class="h-px flex-1 bg-line"></span>
+          </div>
+
+          <!-- 시스템 메시지(불칸 분류: source=transcript & type=status). 좌측 + '시스템 형식' + 기본 접힘. -->
+          <div v-else-if="it.m.isSystem" :class="['w-full', mobile ? 'max-w-[96%]' : 'max-w-[88%]']">
+            <div class="overflow-hidden rounded-xl border border-dashed border-line bg-[#FAFAFB]">
+              <!-- 헤더: 클릭하면 펼침/접힘. 시스템 표식(아바타 대신 SYS 칩) + 요약 첫 줄. -->
+              <button
+                @click="toggleSystem(it.m.messageId)"
+                class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[#F2F2F4]"
+                :title="isSystemExpanded(it.m.messageId) ? '접기' : '펼치기'"
+              >
+                <Icon :name="isSystemExpanded(it.m.messageId) ? 'chevronDown' : 'chevronRight'" :size="13" class="flex-shrink-0 text-ink-400" />
+                <span class="flex-shrink-0 rounded bg-ink-900/10 px-1.5 py-px font-mono text-[9.5px] font-bold tracking-wide text-ink-500">SYS</span>
+                <span class="flex-shrink-0 text-[11.5px] font-semibold text-ink-500">시스템 알림</span>
+                <span v-if="!isSystemExpanded(it.m.messageId)" class="truncate font-mono text-[11px] text-ink-400">{{ systemSummary(it.m.text) }}</span>
+                <span class="ml-auto flex-shrink-0 font-mono text-[10px] text-ink-300">{{ fmtTime(it.m.occurredAt, true) }}</span>
+              </button>
+              <!-- 본문(펼침): 모노·작은글씨. XSS 안전(renderMessageBody escape 후 렌더). -->
+              <div
+                v-if="isSystemExpanded(it.m.messageId)"
+                class="md-body break-words border-t border-dashed border-line px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-ink-500"
+                v-html="renderMessageBody(it.m.text)"
+              ></div>
+            </div>
           </div>
 
           <!-- 메시지 -->

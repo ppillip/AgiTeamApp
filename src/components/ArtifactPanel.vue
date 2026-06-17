@@ -2,6 +2,8 @@
 import Icon from "./Icon.vue";
 import ArtifactTree from "./ArtifactTree.vue";
 import ArtifactViewer from "./ArtifactViewer.vue";
+import ArtifactContextMenu from "./ArtifactContextMenu.vue";
+import Toast from "./Toast.vue";
 import { store, loadTreeRoot, setRootType } from "../stores/monitor.js";
 
 // 산출물 패널 상단 세그먼트 탭: 산출물(documents) ↔ 코드(system) ↔ 페르소나(persona, BE→brain).
@@ -18,7 +20,7 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 export default {
   name: "ArtifactPanel",
-  components: { Icon, ArtifactTree, ArtifactViewer },
+  components: { Icon, ArtifactTree, ArtifactViewer, ArtifactContextMenu, Toast },
   // treeOnly: '크게'(인라인 확대) 모드에서 우측 패널을 트리만 표시(작은 뷰어 숨김).
   props: { treeOnly: { type: Boolean, default: false } },
   emits: ["expand"],
@@ -147,5 +149,9 @@ export default {
 
     <!-- 뷰어 (S-05) — 큰 뷰 모드에선 중앙(채팅 영역)으로 이동하므로 패널에선 숨김. '크게'는 전파. -->
     <ArtifactViewer v-if="!treeOnly" @expand="$emit('expand')" />
+
+    <!-- 트리 우클릭 컨텍스트 메뉴 + 피드백 토스트(WG-ART-07). fixed 라 패널 어디에 둬도 무방. -->
+    <ArtifactContextMenu />
+    <Toast />
   </aside>
 </template>

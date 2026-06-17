@@ -670,6 +670,29 @@ async fn artifacts_write(
     }
 }
 
+// WG-ART-07: 산출물/코드/페르소나 파일 삭제 (FE 우클릭 '삭제' 메뉴).
+// FE 계약(src/api/index.js deleteFile): POST /api/webgui/artifacts/delete
+//   body { project_id?, root_type?, path }. 응답 {ok:true,data:{deleted:true,path}}.
+#[derive(Debug, Deserialize)]
+struct DeleteBody {
+    path: String,
+    project_id: Option<String>,
+    root_type: Option<String>,
+}
+
+async fn artifacts_delete(
+    State(s): State<AppState>,
+    Json(body): Json<DeleteBody>,
+) -> (StatusCode, Json<Value>) {
+    let svc = s.artifact_svc(body.project_id.as_deref(), body.root_type.as_deref());
+    // _archive 백업 파일명 타임스탬프(로컬시각 YYYYMMDDhhmmss).
+    let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+    match svc.delete_file(&body.path, &timestamp) {
+        Ok(data) => ok_200(data),
+        Err(e) => err_response(e),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct StreamQuery {
     path: String,
@@ -999,6 +1022,7 @@ fn app(state: AppState) -> Router {
         .route("/api/webgui/artifacts/file", get(artifacts_file))
         .route("/api/webgui/artifacts/file/stream", get(artifacts_stream))
         .route("/api/webgui/artifacts/write", post(artifacts_write))
+        .route("/api/webgui/artifacts/delete", post(artifacts_delete))
         .route("/api/webgui/message-attachments/images", post(attachment_upload))
         .route("/api/webgui/message-attachments/:attachment_id/preview", get(attachment_preview))
         .route("/api/webgui/message-stream", get(message_stream))

@@ -99,6 +99,12 @@ export const store = reactive({
   //   변경 이벤트의 root_type 에 따라 해당 탭 맵에 기록 → 다른 탭에서 변경돼도 누적되고,
   //   탭 전환(setRootType) 시에도 보존되어 그 탭으로 가면 하이라이팅이 그대로 보인다.
   externalChanges: freshExternalChanges(),
+
+  // 트리 우클릭 컨텍스트 메뉴(WG-ART-07): 트리 노드에서 contextmenu → 열림.
+  //   x/y 는 clientX/clientY(메뉴 컴포넌트가 뷰포트 밖으로 안 넘치게 보정). node 는 대상 파일/폴더.
+  contextMenu: { open: false, x: 0, y: 0, node: null },
+  // 짧은 피드백 토스트(경로 복사/삭제 결과 등). tone: 'ok' | 'err'.
+  toast: { show: false, text: "", tone: "ok" },
 });
 
 // ── 파생 getter (computed 대용 함수) ─────────────────────────
@@ -759,6 +765,90 @@ async function fullArtifactResync() {
     if (store.expanded[p]) await refreshDirIfVisible(p);
   }
   if (store.viewer.open && store.viewer.path) await reloadViewer(store.viewer.path);
+}
+
+// ── 트리 컨텍스트 메뉴 / 토스트 (WG-ART-07) ──────────────────
+let _toastTimer = null;
+
+// 짧은 피드백 토스트. 같은 토스트가 떠 있어도 새 메시지로 갱신 + 타이머 리셋.
+export function showToast(text, tone = "ok", ms = 1800) {
+  store.toast = { show: true, text, tone };
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => {
+    store.toast = { ...store.toast, show: false };
+    _toastTimer = null;
+  }, ms);
+}
+
+// 트리 노드 우클릭 → 컨텍스트 메뉴 열기. x/y 는 clientX/clientY(메뉴 측에서 뷰포트 보정).
+export function openContextMenu(node, x, y) {
+  store.contextMenu = { open: true, x, y, node };
+}
+export function closeContextMenu() {
+  if (store.contextMenu.open) store.contextMenu = { open: false, x: 0, y: 0, node: null };
+}
+
+// 경로 복사: 대상 노드의 project-root 기준 상대경로를 클립보드로. navigator.clipboard 불가 시 폴백.
+export async function copyArtifactPath(node) {
+  closeContextMenu();
+  const path = node?.path || "";
+  if (!path) return;
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(path);
+      ok = true;
+    }
+  } catch {
+    /* 권한/비보안 컨텍스트 → 폴백 */
+  }
+  if (!ok) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = path;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch {
+      ok = false;
+    }
+  }
+  showToast(ok ? "경로를 복사했습니다" : "복사에 실패했습니다", ok ? "ok" : "err");
+}
+
+// 파일/폴더 삭제(확인 다이얼로그는 호출부 UI에서 1회 수행). 성공 시 부모 디렉토리 재조회로 목록 갱신.
+//   삭제 API(POST /artifacts/delete)가 BE 미구현이면 ApiError → 토스트 안내(앱 유지).
+export async function deleteArtifact(node) {
+  closeContextMenu();
+  const path = node?.path || "";
+  if (!path) return;
+  const pid = store.selectedProjectId;
+  try {
+    await api.deleteFile(path, { projectId: pid, rootType: store.rootType });
+    if (store.selectedProjectId !== pid) return; // 그 사이 프로젝트 전환 → 폐기
+    // 로컬 트리 정리: 펼침/자식 캐시에서 대상 서브트리 제거 후 부모 디렉토리 재조회.
+    purgeSubtree(path);
+    const slash = path.lastIndexOf("/");
+    const parent = slash >= 0 ? path.slice(0, slash) : "";
+    invalidateDirCache(parent);
+    await refreshDirIfVisible(parent);
+    // 삭제된 파일을 뷰어에서 보고 있었다면 닫는다.
+    if (store.viewer.open && store.viewer.path === path) {
+      store.viewer = { open: false, loading: false, path: null, file: null, error: null };
+    }
+    showToast("삭제했습니다", "ok");
+  } catch (e) {
+    const msg =
+      e instanceof ApiError
+        ? e.status === 404 || e.status === 405
+          ? "삭제 API가 아직 준비되지 않았습니다"
+          : e.message || "삭제에 실패했습니다"
+        : "삭제에 실패했습니다";
+    showToast(msg, "err");
+  }
 }
 
 // ── 액션 ────────────────────────────────────────────────────

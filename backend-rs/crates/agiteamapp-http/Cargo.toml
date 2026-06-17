@@ -17,3 +17,5 @@ sha2 = { workspace = true }
 notify = "6"
 # ACT-POL-03 supervisor: child(PollerFaster-rs) 에 SIGTERM 전파(graceful), pid liveness 점검.
 libc = "0.2"
+# WG-ART-07 휴지통식 삭제: _archive 백업 파일명 타임스탬프(YYYYMMDDhhmmss, 로컬시각) 생성.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
