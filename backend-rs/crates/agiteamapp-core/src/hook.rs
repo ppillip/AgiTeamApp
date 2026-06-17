@@ -122,7 +122,16 @@ pub async fn collect_hook<R: WebguiRepository, P: EventPublisher, T: TranscriptP
         publisher.publish(&room.room_id, ws, &req.project_id);
     }
 
-    if event_type == "hook_stop" {
+    // 세션 등록 + 증분 수집을 **모든 훅 이벤트**에서 수행한다(hook_stop 한정 아님).
+    // 근거(Python 정합): collector_service.collect_event 는 session_id 가 있는 *어떤* 훅이든
+    //   collector.sessions.register(...) 로 세션을 등록한다(즉시 collect 만 hook_stop).
+    //   그 등록 세션을 transcript_loop 가 주기 폴링해 모든 역할의 발화를 실시간 수집한다.
+    // 기존 Rust 는 hook_stop 에서만 collect→tx_sessions 등록했다. 그 결과 최근 Stop 이 없는
+    //   세션(예: PM 이 뮤즈에 보낸 메시지를 받은 뮤즈 세션)은 폴링 대상에 없어 다음 Stop 까지
+    //   실시간 누락됐다. SessionStart/PreToolUse/PostToolUse 등 어떤 훅이든 등록·증분수집한다.
+    //   collect() 는 offset 기반이라 신규분 없으면 즉시 return(거의 무비용)이고, 등록 부작용으로
+    //   1초 폴링 루프가 해당 세션을 영구 커버한다. (transcript_path 없으면 collect 가 no-op)
+    {
         let hint = TranscriptHint {
             provider: provider.clone(),
             session_id: req.session_id.clone(),

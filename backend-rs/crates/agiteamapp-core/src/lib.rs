@@ -156,6 +156,13 @@ mod tests {
             self.messages.lock().unwrap().push(row.clone());
             Ok(row)
         }
+        async fn create_message_on_conflict_skip(
+            &self,
+            m: NewMessage,
+        ) -> Result<Option<MessageRow>, RepoError> {
+            // 테스트 Fake: 충돌 분기 없이 항상 신규 저장으로 위임.
+            Ok(Some(self.create_message(m).await?))
+        }
         async fn touch_room_last_message(
             &self,
             _room: &str,

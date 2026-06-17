@@ -20,7 +20,7 @@ import {
   provenanceInfo,
   connectionInfo,
 } from "../src/api/adapters.js";
-import { parentOf, planArtifactChange, folderHasUnseenChange } from "../src/stores/artifactChange.js";
+import { parentOf, planArtifactChange, folderHasUnseenChange, staleAncestorKeys } from "../src/stores/artifactChange.js";
 import {
   planActivityPulse,
   isRecentlyActive,
@@ -404,6 +404,50 @@ ok(planArtifactChange({ project_id: "Panthea", change_type: "modified" }, VIEW()
   ok(folderHasUnseenChange({ "d/c.md": false }, "d") === false, "ui10: false 값 키 무시");
 }
 
+// ── UI-10 조상 전파 보강: staleAncestorKeys (phantom 디렉토리 키 청소) ──────────
+// 증상: 파일을 읽어 그 파일 키는 풀리는데, watcher/폴링이 디렉토리 변경을 파일처럼 마킹해 남긴
+//       phantom 디렉토리 키가 조상 폴더 prefix 에 영구히 걸려 상위 폴더 bold 가 안 풀림.
+// 수정: 읽은 파일의 '조상 경로와 일치하는' 키(=반드시 디렉토리)를 함께 삭제.
+{
+  // phantom 디렉토리 키("documents/products") + 읽은 파일 키 공존 상황
+  const m = {
+    "documents/products": true,          // phantom 디렉토리 키(해제 불가능했던 잔존물)
+    "documents/products/sub": true,      // phantom 중간 디렉토리 키
+    "documents/products/sub/a.md": true, // 실제 읽은 파일
+    "documents/products/sub/b.md": true, // 형제 미열람 파일(보존돼야 함)
+    "documents/other/c.md": true,        // 다른 가지(보존)
+  };
+  const stale = staleAncestorKeys(m, "documents/products/sub/a.md").sort();
+  ok(JSON.stringify(stale) === JSON.stringify(["documents/products", "documents/products/sub"]),
+     "ui10+: 읽은 파일의 조상 디렉토리 키만 수집");
+  // 형제 파일/다른 가지/파일 자신은 조상이 아니므로 미수집
+  ok(!stale.includes("documents/products/sub/b.md"), "ui10+: 형제 파일 키 보존");
+  ok(!stale.includes("documents/other/c.md"), "ui10+: 다른 가지 키 보존");
+  ok(!stale.includes("documents/products/sub/a.md"), "ui10+: 파일 자신은 미수집(별도 삭제)");
+
+  // clearExternalChange 시뮬레이션: 파일 자신 + 조상 키 삭제 → 조상 폴더 bold 해제 검증
+  delete m["documents/products/sub/a.md"];
+  for (const k of staleAncestorKeys(m, "documents/products/sub/a.md")) delete m[k];
+  // a.md 가 마지막이었다면 sub/products 폴더는 풀려야 하나, 형제 b.md 가 남아 있으므로 유지
+  ok(folderHasUnseenChange(m, "documents/products") === true, "ui10+: 형제(b.md) 잔존 → 조상 유지");
+  // 이제 b.md 까지 읽으면 조상 전체 해제
+  delete m["documents/products/sub/b.md"];
+  for (const k of staleAncestorKeys(m, "documents/products/sub/b.md")) delete m[k];
+  ok(folderHasUnseenChange(m, "documents/products") === false, "ui10+: 마지막 파일 열람 → 조상(products) bold 해제");
+  ok(folderHasUnseenChange(m, "documents/products/sub") === false, "ui10+: 직속 폴더(sub)도 해제");
+  // documents 는 다른 가지(other/c.md) 미열람이 남아 있으므로 정상적으로 bold 유지
+  ok(folderHasUnseenChange(m, "documents") === true, "ui10+: 공통 조상은 타 가지 미열람으로 bold 유지(정상)");
+  ok(folderHasUnseenChange(m, "documents/other") === true, "ui10+: 무관한 가지(other)는 영향 없음");
+  // other/c.md 까지 읽으면 비로소 documents 전체 해제
+  delete m["documents/other/c.md"];
+  for (const k of staleAncestorKeys(m, "documents/other/c.md")) delete m[k];
+  ok(folderHasUnseenChange(m, "documents") === false, "ui10+: 모든 가지 열람 → 최상위 조상까지 해제");
+
+  // 방어: null/빈 입력
+  ok(staleAncestorKeys(null, "a/b.md").length === 0, "ui10+: null 맵 방어");
+  ok(staleAncestorKeys({ "a": true }, "").length === 0, "ui10+: 빈 path 방어");
+}
+
 // ── 이미지 첨부 검증 (DV-91, DS-40 §7.6.3 / DS-60 §5.4.2) ──────────
 // 형식 판정(MIME 우선, type 없으면 확장자 보조)
 ok(isAllowedImageType({ type: "image/png", name: "a.png", size: 100 }) === true, "img: png 허용");
@@ -458,7 +502,7 @@ ok(msgWithAtt[0].attachments.length === 2 && msgWithAtt[0].attachments[0].attach
 ok(Array.isArray(msgWithAtt[1].attachments) && msgWithAtt[1].attachments.length === 0, "msg: 첨부 없으면 빈 배열");
 
 // ── 에이전트 깜빡 감쇠 인디케이터 (요구사항 15-1, DS-110 §8/§9) ──────────
-ok(ACTIVITY_BLINK_MS === 2000, "blink: 자연 정지 시간 2000ms(중간 끊김 완화, 유저 결정 2026-06-15)");
+ok(ACTIVITY_BLINK_MS === 3000, "blink: 자연 정지 시간 3000ms(2초→3초 상향, 유저 요청 2026-06-16)");
 
 // planActivityPulse: active pulse 만 깜빡을 만든다(가드 규칙)
 const NOW = 100000; // 가상 현재 시각(epoch ms)
@@ -491,9 +535,9 @@ ok(
   "blink: occurred_at 없어도 적용"
 );
 
-// isRecentlyActive: REST 폴백 degrade(last_active_at blinkMs(2초) 이내만 표시 유지, §9)
+// isRecentlyActive: REST 폴백 degrade(last_active_at blinkMs(3초) 이내만 표시 유지, §9)
 ok(isRecentlyActive(NOW - 1000, NOW) === true, "blink: REST degrade 1초 전 → 동작중 유지");
-ok(isRecentlyActive(NOW - ACTIVITY_BLINK_MS, NOW) === false, "blink: REST degrade blinkMs(2초) 경과 → 미유지(경계)");
+ok(isRecentlyActive(NOW - ACTIVITY_BLINK_MS, NOW) === false, "blink: REST degrade blinkMs(3초) 경과 → 미유지(경계)");
 ok(isRecentlyActive(null, NOW) === false, "blink: last_active_at 없음 → 미유지");
 ok(isRecentlyActive(NOW, NOW) === true, "blink: delta=0(경계) → 동작중(신선)");
 // ⚠️ 미래 시각 방어 회귀(유저 실측 2026-06-15): 서버 시계가 앞서 last_active_at>now → delta<0.
@@ -527,7 +571,7 @@ function fakeClock(start = 0) {
   };
 }
 
-// (1) 단일 pulse → active, blinkKey 증가, blinkMs(2초) 후 자가 idle
+// (1) 단일 pulse → active, blinkKey 증가, blinkMs(3초) 후 자가 idle
 {
   const clk = fakeClock(0);
   const b = createActivityBlinker({ blinkMs: ACTIVITY_BLINK_MS, now: clk.now, setTimer: clk.setTimer, clearTimer: clk.clearTimer });
@@ -538,7 +582,7 @@ function fakeClock(start = 0) {
   clk.advance(ACTIVITY_BLINK_MS - 1);
   ok(room.runtimeActivity === "active", "blink: blinkMs 직전엔 여전히 active");
   clk.advance(1);
-  ok(room.runtimeActivity === "idle" && b.pending() === 0, "blink: blinkMs(2초) 무신호 → 자가 idle 자연정지");
+  ok(room.runtimeActivity === "idle" && b.pending() === 0, "blink: blinkMs(3초) 무신호 → 자가 idle 자연정지");
 }
 
 // (2) 1초 간격 연속 pulse → 끊김 없이 active 유지(타이머 0 리셋)
@@ -554,9 +598,9 @@ function fakeClock(start = 0) {
   ok(room.runtimeActivity === "active", "blink: 1초 간격 연속 pulse → 끊김 없이 active");
   ok(room.activityBlinkKey === 3, "blink: pulse 3회 → blinkKey=3(재시작 key)");
   ok(b.pending() === 1, "blink: 연속 pulse 중 타이머는 항상 1건(중복 누적 없음)");
-  // 마지막 pulse(t=2000) 후 멈추면 blinkMs(2초) 뒤 idle
+  // 마지막 pulse(t=2000) 후 멈추면 blinkMs(3초) 뒤 idle
   clk.advance(ACTIVITY_BLINK_MS);
-  ok(room.runtimeActivity === "idle", "blink: 연속 후 멈추면 blinkMs(2초) 뒤 idle");
+  ok(room.runtimeActivity === "idle", "blink: 연속 후 멈추면 blinkMs(3초) 뒤 idle");
 }
 
 // (3) cancelAll → 진행 중 타이머 정리(프로젝트 전환/종료)
@@ -581,8 +625,8 @@ function fakeClock(start = 0) {
   b.pulse(room, T - 600000);
   ok(room.lastActivityPulseAt === T, "blink: lastActivityPulseAt = 수신 시각(now), occurred_at 무시");
   ok(cardActivityState(room, { degraded: false, now: T })?.active === true, "blink+card: occurred_at 과거여도 수신 직후 동작중(clock skew 회귀)");
-  ok(cardActivityState(room, { degraded: false, now: T + ACTIVITY_BLINK_MS - 1 })?.active === true, "blink+card: 수신 blinkMs(2초) 직전 동작중");
-  ok(cardActivityState(room, { degraded: false, now: T + ACTIVITY_BLINK_MS }) === null, "blink+card: 수신 blinkMs(2초) 경과 → 자연정지");
+  ok(cardActivityState(room, { degraded: false, now: T + ACTIVITY_BLINK_MS - 1 })?.active === true, "blink+card: 수신 blinkMs(3초) 직전 동작중");
+  ok(cardActivityState(room, { degraded: false, now: T + ACTIVITY_BLINK_MS }) === null, "blink+card: 수신 blinkMs(3초) 경과 → 자연정지");
 }
 
 // ── cardActivityState: connection 게이트 제거 회귀 (PM 긴급 2026-06-15) ──────────
@@ -597,12 +641,12 @@ ok(
   cardActivityState({ lastActivityPulseAt: NOW, connectionState: "connected" }, { degraded: false, now: NOW })?.active === true,
   "card: connected + WS pulse 신선 → 동작중"
 );
-// WS pulse blinkMs(2초) 경과 → 자연 정지(null)
+// WS pulse blinkMs(3초) 경과 → 자연 정지(null)
 ok(
   cardActivityState({ lastActivityPulseAt: NOW - ACTIVITY_BLINK_MS }, { degraded: false, now: NOW }) === null,
-  "card: WS pulse blinkMs(2초) 경과 → 자연 정지(null)"
+  "card: WS pulse blinkMs(3초) 경과 → 자연 정지(null)"
 );
-// REST degrade: disconnected 여도 last_active_at blinkMs(2초) 이내면 동작중
+// REST degrade: disconnected 여도 last_active_at blinkMs(3초) 이내면 동작중
 ok(
   cardActivityState({ runtimeActivity: "unknown", connectionState: "disconnected", lastActiveAt: NOW - 1000 }, { degraded: false, now: NOW })?.active === true,
   "card: disconnected + last_active_at 1초전 → 동작중(REST degrade)"
@@ -632,10 +676,10 @@ ok(
   cardActivityState({ lastActivityPulseAt: NOW, connectionState: "connected" }, { degraded: true, now: NOW }) === null,
   "card: degraded(mock) → 신선 pulse 여도 null(가짜 깜빡 금지)"
 );
-// last_active_at blinkMs(2초) 경과 + unknown → null(자연 정지 후)
+// last_active_at blinkMs(3초) 경과 + unknown → null(자연 정지 후)
 ok(
   cardActivityState({ runtimeActivity: "unknown", lastActiveAt: NOW - ACTIVITY_BLINK_MS }, { degraded: false, now: NOW }) === null,
-  "card: last_active_at blinkMs(2초) 경과 → 표식 없음(자연정지)"
+  "card: last_active_at blinkMs(3초) 경과 → 표식 없음(자연정지)"
 );
 
 // ── 결과 ────────────────────────────────────────────────────

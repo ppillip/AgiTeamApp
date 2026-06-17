@@ -124,32 +124,120 @@ impl MuxPort for CmuxAdapter {
         }
     }
     async fn submit(&self, t: &PmTarget, text: &str) -> Result<bool, ApiError> {
-        // Python cmux_adapter: `cmux send`(텍스트 입력) + `cmux send-key Enter`(제출) atomic.
+        // Python cmux_adapter.submit / bin/team cmd_send 정합:
+        //  - 단일라인 = send(text) + send-key Enter(제출)
+        //  - 멀티라인 = 각 줄 send, 줄 사이 send-key shift+enter(soft newline, 제출 안 함),
+        //               맨 끝에 send-key Enter(진짜 제출). cmux send 가 실제 개행을 그대로
+        //               흘려보내 에이전트 TUI 가 줄마다 제출로 오인하는 것을 막는다.
         // workspace+surface 직접 지정(역할명 아님) → 어느 워크스페이스에서 떠도 PM 에 닿는다.
-        let mut send = self.cmux();
-        send.arg("send");
+        //
+        // ★ 제출 누락 버그 수정: send → send-key 를 간격 없이 백투백 실행하면 에이전트 TUI
+        //   (Claude Code·Codex)가 주입 텍스트를 입력위젯에 렌더하기 전에 Enter 가 도착해
+        //   '빈 입력 제출(무효) + 텍스트만 남음'이 된다. team(셸 서브프로세스)·Python 은
+        //   자연 스폰 간격이 있어 안 터지지만 tokio 백투백은 너무 빠르다. 텍스트 주입 후
+        //   settle 지연을 두고 Enter 를 보낸다(기본 120ms, AGITEAMAPP_SUBMIT_SETTLE_MS).
+        let settle_ms = std::env::var("AGITEAMAPP_SUBMIT_SETTLE_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(200); // 기본 200ms (TUI 렌더 settle, 유저 지시 상향)
+        let settle = || tokio::time::sleep(std::time::Duration::from_millis(settle_ms));
+        eprintln!(
+            "[mux:submit] surface={} ws={:?} lines={} settle={}ms",
+            t.surface_id,
+            t.workspace_id,
+            text.split('\n').count(),
+            settle_ms
+        );
+
+        // \r\n / \r 정규화 후 줄 분해.
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let lines: Vec<&str> = normalized.split('\n').collect();
+
+        if lines.len() <= 1 {
+            if !self.send_text(t, text).await? {
+                return Ok(false);
+            }
+            settle().await; // TUI 렌더 settle 후 제출
+            let ok = self.send_key(t, "Enter").await?;
+            self.verify_submitted(t).await;
+            return Ok(ok);
+        }
+
+        // 멀티라인: 줄 사이 shift+enter, 끝에 Enter
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 && !self.send_key(t, "shift+enter").await? {
+                return Ok(false);
+            }
+            // 빈 줄은 shift+enter 로 이미 줄바꿈됨 → cmux send "" 회피
+            if !line.is_empty() && !self.send_text(t, line).await? {
+                return Ok(false);
+            }
+        }
+        settle().await;
+        let ok = self.send_key(t, "Enter").await?;
+        self.verify_submitted(t).await;
+        Ok(ok)
+    }
+}
+
+impl CmuxAdapter {
+    /// `cmux send [--workspace ws] --surface X -- <text>` (텍스트 입력, 제출 안 함).
+    async fn send_text(&self, t: &PmTarget, text: &str) -> Result<bool, ApiError> {
+        let mut c = self.cmux();
+        c.arg("send");
         if let Some(ws) = &t.workspace_id {
-            send.arg("--workspace").arg(ws);
+            c.arg("--workspace").arg(ws);
         }
-        // `--` 구분자로 text 가 flag 로 오인되는 것 방지 (cmux send [flags] [--] <text>).
-        send.arg("--surface").arg(&t.surface_id).arg("--").arg(text);
-        let sent = match send.output().await {
-            Ok(o) => o.status.success(),
-            Err(e) => return Err(ApiError::new("send_failed", 502, format!("cmux send: {e}"))),
-        };
-        if !sent {
-            return Ok(false);
+        // `--` 로 text 가 flag 로 오인되는 것 방지 (cmux send [flags] [--] <text>).
+        c.arg("--surface").arg(&t.surface_id).arg("--").arg(text);
+        match c.output().await {
+            Ok(o) => {
+                // ② 진단: 텍스트 주입 명령 결과(운영 로그 가시화).
+                eprintln!("[mux:send] surface={} rc={}", t.surface_id, o.status.success());
+                Ok(o.status.success())
+            }
+            Err(e) => Err(ApiError::new("send_failed", 502, format!("cmux send: {e}"))),
         }
-        // Enter 제출 (cmux send-key Enter)
-        let mut key = self.cmux();
-        key.arg("send-key");
+    }
+
+    /// `cmux send-key [--workspace ws] --surface X <key>` (Enter / shift+enter 등).
+    async fn send_key(&self, t: &PmTarget, key: &str) -> Result<bool, ApiError> {
+        let mut c = self.cmux();
+        c.arg("send-key");
         if let Some(ws) = &t.workspace_id {
-            key.arg("--workspace").arg(ws);
+            c.arg("--workspace").arg(ws);
         }
-        key.arg("--surface").arg(&t.surface_id).arg("Enter");
-        match key.output().await {
-            Ok(o) => Ok(o.status.success()),
+        c.arg("--surface").arg(&t.surface_id).arg(key);
+        match c.output().await {
+            Ok(o) => {
+                // ② 진단: 제출(Enter)·soft newline 키 전송 결과.
+                eprintln!("[mux:send-key] surface={} key={} rc={}", t.surface_id, key, o.status.success());
+                Ok(o.status.success())
+            }
             Err(e) => Err(ApiError::new("send_failed", 502, format!("cmux send-key: {e}"))),
+        }
+    }
+
+    /// ④ 제출 검증: 제출 직후 입력란을 읽어 정체 텍스트 유무를 로그로 남긴다(진단용).
+    /// AGITEAMAPP_SUBMIT_VERIFY=1 일 때만 동작(평상시 비용 0).
+    async fn verify_submitted(&self, t: &PmTarget) {
+        if std::env::var("AGITEAMAPP_SUBMIT_VERIFY").ok().as_deref() != Some("1") {
+            return;
+        }
+        let mut c = self.cmux();
+        c.arg("read-screen");
+        if let Some(ws) = &t.workspace_id {
+            c.arg("--workspace").arg(ws);
+        }
+        c.arg("--surface").arg(&t.surface_id).arg("--lines").arg("3");
+        if let Ok(o) = c.output().await {
+            let screen = String::from_utf8_lossy(&o.stdout);
+            // 입력 프롬프트 줄(❯) 뒤에 내용이 남았는지 대략 판별.
+            let stuck = screen.lines().any(|l| {
+                let t = l.trim_start();
+                t.starts_with('❯') && t.trim_start_matches('❯').trim().len() > 0
+            });
+            eprintln!("[mux:verify] surface={} input_stuck={}", t.surface_id, stuck);
         }
     }
 }

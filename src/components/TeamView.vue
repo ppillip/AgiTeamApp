@@ -233,8 +233,8 @@ export default {
             </div>
             <div class="mt-1 truncate text-[12.5px] font-semibold text-ink-500">{{ subtitle(pmRoom.role) }}</div>
           </div>
-          <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :class="statusClass(roomStatus(pmRoom).tone)">
-            <span class="h-1.5 w-1.5 rounded-full" :key="'blink-' + (pmRoom.activityBlinkKey || 0)" :class="cardActivity(pmRoom) ? (cardActivity(pmRoom).active ? 'bg-current animate-activity-blink' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(pmRoom).label }}<template v-if="cardActivity(pmRoom)?.active"> · 동작중</template>
+          <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :key="'liveblink-' + (pmRoom.activityBlinkKey || 0)" :class="cardActivity(pmRoom)?.active ? 'border-red-200 bg-red-50 text-red-600 animate-activity-blink' : statusClass(roomStatus(pmRoom).tone)">
+            <span class="h-1.5 w-1.5 rounded-full" :class="cardActivity(pmRoom) ? (cardActivity(pmRoom).active ? 'bg-red-500' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(pmRoom).label }}
           </span>
         </header>
         <div class="flex items-center justify-between gap-2 px-4 pt-2.5 text-[11.5px] font-bold text-ink-500">
@@ -280,8 +280,8 @@ export default {
               </div>
               <div class="mt-1 truncate text-[11.5px] font-semibold text-ink-500">{{ subtitle(r.role) }}</div>
             </div>
-            <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :class="statusClass(roomStatus(r).tone)">
-              <span class="h-1.5 w-1.5 rounded-full" :key="'blink-' + (r.activityBlinkKey || 0)" :class="cardActivity(r) ? (cardActivity(r).active ? 'bg-current animate-activity-blink' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(r).label }}<template v-if="cardActivity(r)?.active"> · 동작중</template>
+            <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-[5px] text-[10.5px] font-black" :key="'liveblink-' + (r.activityBlinkKey || 0)" :class="cardActivity(r)?.active ? 'border-red-200 bg-red-50 text-red-600 animate-activity-blink' : statusClass(roomStatus(r).tone)">
+              <span class="h-1.5 w-1.5 rounded-full" :class="cardActivity(r) ? (cardActivity(r).active ? 'bg-red-500' : 'bg-grn/50') : 'bg-current'"></span>{{ roomStatus(r).label }}
             </span>
           </header>
           <div class="flex items-center justify-between gap-2 px-[13px] pt-2.5 text-[11.5px] font-bold text-ink-500">

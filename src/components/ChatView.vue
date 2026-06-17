@@ -270,12 +270,15 @@ export default {
             </span>
             <h1 class="truncate text-[20px] font-bold tracking-[-0.015em]">{{ room.displayName }}</h1>
             <span class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11.5px] font-bold tracking-wide"
-                  :class="connStatus.tone === 'live'
+                  :class="activity?.active
+                    ? 'border-red-200 bg-red-50 text-red-600 animate-activity-blink'
+                    : connStatus.tone === 'live'
                     ? 'border-grn-tintbd bg-grn-tint text-grn-700'
                     : connStatus.tone === 'mock'
                     ? 'border-amber-tintbd bg-amber-tint text-amber-600'
-                    : 'border-line bg-line-soft text-ink-500'">
-              <span class="h-1.5 w-1.5 rounded-full" :key="'blink-' + (room.activityBlinkKey || 0)" :class="activity ? (activity.active ? 'bg-current animate-activity-blink' : 'bg-grn/50') : 'bg-current'"></span>{{ connStatus.label }}<template v-if="activity?.active"> · 동작중</template>
+                    : 'border-line bg-line-soft text-ink-500'"
+                  :key="'liveblink-' + (room.activityBlinkKey || 0)">
+              <span class="h-1.5 w-1.5 rounded-full" :class="activity ? (activity.active ? 'bg-red-500' : 'bg-grn/50') : 'bg-current'"></span>{{ connStatus.label }}
             </span>
             <!-- 수집기 상태 경고 (DS-60: collector delayed/stopped) -->
             <span v-if="collectorWarn"

@@ -28,6 +28,23 @@ export function folderHasUnseenChange(externalChanges, folderPath) {
   return false;
 }
 
+// UI-10 조상 전파 보강(파일 읽음 → 조상 폴더 bold 해제): 읽은 파일의 '조상 경로와 정확히
+// 일치하는' externalChanges 키들을 수집한다. externalChanges 에는 본래 파일 키만 있어야 하지만,
+// watcher/폴링 폴백이 node_type 미동봉으로 디렉토리 변경을 파일처럼 마킹하면(결함) 그 디렉토리
+// 키가 영구 잔존해 조상 폴더가 prefix 매칭에 영구히 걸려 bold 가 안 풀린다(보고된 증상).
+//   - k 가 filePath 의 조상이라는 것(filePath.startsWith(k + "/"))은 k 가 '반드시 디렉토리'임을 뜻한다
+//     (파일은 다른 경로의 조상이 될 수 없다). 따라서 이런 키 제거는 항상 안전하다.
+//   - 형제 파일/형제 폴더 키는 조상 경로가 아니므로 보존 → 미열람이 남은 폴더 bold 는 정상 유지.
+// 반환: 삭제 대상 키 배열(실제 삭제·반응성 트리거는 store 가 담당).
+export function staleAncestorKeys(externalChanges, filePath) {
+  if (!externalChanges || !filePath) return [];
+  const out = [];
+  for (const k in externalChanges) {
+    if (externalChanges[k] && k !== filePath && filePath.startsWith(k + "/")) out.push(k);
+  }
+  return out;
+}
+
 // 변경 1건을 받아 "무엇을 해야 하는지" 계획만 반환(실행은 store 가 담당).
 //
 // data: artifact_changed 의 data 모델 { project_id, change_type|kind, path, parent_path, node_type, ... }

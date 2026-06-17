@@ -212,6 +212,18 @@ impl DiscoveryRegistry {
         inner.map.get(&(project_id.to_string(), role_id.to_string())).cloned()
     }
 
+    /// 현재 connected 인 모든 surface 의 (project_id, role_id). transcript 폴링 커버리지
+    /// 교차검증용 — 발견된 surface 중 아직 훅으로 transcript 가 등록되지 않은 것을 식별한다.
+    pub fn connected_surfaces(&self) -> Vec<(String, String)> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .map
+            .values()
+            .filter(|i| i.connection_state == "connected")
+            .map(|i| (i.project_id.clone(), i.role_id.clone()))
+            .collect()
+    }
+
     pub fn selected_project_id(&self) -> Option<String> {
         self.inner.lock().unwrap().selected.clone()
     }

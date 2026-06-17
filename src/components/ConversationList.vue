@@ -114,13 +114,13 @@ export default {
           <div class="mt-0.5 truncate text-[13px] text-ink-500">{{ previewText(r.lastText) }}</div>
           <span
             class="mt-[9px] inline-flex items-center gap-[5px] rounded-[7px] px-[9px] py-[3px] text-[11.5px] font-bold tracking-wide"
-            :class="statusClass(roomStatus(r).tone, 'badge')"
+            :key="'live-blink-' + (r.activityBlinkKey || 0)"
+            :class="activity(r)?.active ? 'border border-red-200 bg-red-50 text-red-600 animate-activity-blink' : statusClass(roomStatus(r).tone, 'badge')"
           >
             <span
-              class="h-1.5 w-1.5 rounded-full bg-current"
-              :key="'live-blink-' + (r.activityBlinkKey || 0)"
-              :class="activity(r) && activity(r).active ? 'animate-activity-blink' : ''"
-            ></span>{{ roomStatus(r).label }}<template v-if="activity(r)?.active"> · 동작중</template>
+              class="h-1.5 w-1.5 rounded-full"
+              :class="activity(r) && activity(r).active ? 'bg-red-500' : 'bg-current'"
+            ></span>{{ roomStatus(r).label }}
           </span>
         </div>
       </button>

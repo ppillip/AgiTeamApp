@@ -16,8 +16,16 @@ pub struct PgRepository {
 
 impl PgRepository {
     pub async fn connect(database_url: &str) -> Result<Self, RepoError> {
+        // P3: 부팅 thundering-herd(전 역할 훅 동시 발화) 직렬화 완화.
+        // 기존 5 → 기본 16(Python SQLAlchemy pool 5 + overflow 10 ≈ 15 수준).
+        // AGITEAMAPP_DB_MAX_CONN 으로 조정 가능.
+        let max_conn = std::env::var("AGITEAMAPP_DB_MAX_CONN")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(16);
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_conn)
             .connect(database_url)
             .await
             .map_err(|e| RepoError(format!("connect: {e}")))?;
@@ -344,6 +352,53 @@ impl WebguiRepository for PgRepository {
             .await
             .map_err(|e| RepoError(format!("create_message: {e}")))?;
         map_message(&row)
+    }
+
+    async fn create_message_on_conflict_skip(
+        &self,
+        m: NewMessage,
+    ) -> Result<Option<MessageRow>, RepoError> {
+        let message_id = Uuid::new_v4();
+        // P2: idx_webgui_message_provider_record (UNIQUE (provider, transcript_record_id)
+        //     WHERE transcript_record_id IS NOT NULL) 를 arbiter 로 ON CONFLICT DO NOTHING.
+        // 충돌이면 RETURNING 행이 없어 fetch_optional → None(이미 저장됨).
+        // transcript_record_id 가 NULL 이면 부분 인덱스에 없어 충돌 불가 → 정상 INSERT.
+        let sql = format!(
+            "INSERT INTO webgui_message \
+             (message_id, room_id, agent_session_id, correlation_id, role_id, surface_id, \
+              team_session_id, direction, source, message_type, provider, transcript_path, \
+              transcript_offset, transcript_record_id, raw_text, normalized_text, raw_hash, \
+              status, occurred_at) \
+             VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+              $14, $15, $16, $17, $18, $19::timestamptz) \
+             ON CONFLICT (provider, transcript_record_id) \
+              WHERE transcript_record_id IS NOT NULL DO NOTHING \
+             RETURNING {MSG_COLS}"
+        );
+        let row = sqlx::query(&sql)
+            .bind(message_id)
+            .bind(&m.room_id)
+            .bind(&m.agent_session_id)
+            .bind(&m.correlation_id)
+            .bind(&m.role_id)
+            .bind(&m.surface_id)
+            .bind(&m.team_session_id)
+            .bind(&m.direction)
+            .bind(&m.source)
+            .bind(&m.message_type)
+            .bind(&m.provider)
+            .bind(&m.transcript_path)
+            .bind(&m.transcript_offset)
+            .bind(&m.transcript_record_id)
+            .bind(&m.raw_text)
+            .bind(&m.normalized_text)
+            .bind(&m.raw_hash)
+            .bind(&m.status)
+            .bind(&m.occurred_at_iso)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepoError(format!("create_message_on_conflict_skip: {e}")))?;
+        row.as_ref().map(map_message).transpose()
     }
 
     async fn touch_room_last_message(

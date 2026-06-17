@@ -14,7 +14,7 @@ import { reactive } from "vue";
 import * as api from "../api/index.js";
 import { ApiError } from "../api/client.js";
 import { adaptMessage, adaptRoom, roleOrder } from "../api/adapters.js";
-import { planArtifactChange } from "./artifactChange.js";
+import { planArtifactChange, staleAncestorKeys } from "./artifactChange.js";
 import { planActivityPulse, createActivityBlinker } from "./activityBlink.js";
 import { validateImageFile, MAX_ATTACH_COUNT } from "../lib/imageAttach.js";
 import {
@@ -633,11 +633,17 @@ function markExternalChange(root, path) {
   store.externalChanges[r][path] = true;
 }
 // 특정 탭(root)의 표식 해제. root 미지정 시 현재 활성 탭 기준(openFile 등 활성 탭 열람 경로).
+// 파일 자신의 표식뿐 아니라 '그 파일의 조상 경로와 일치하는 (디렉토리) phantom 키'도 함께 청소해
+// 조상 폴더 bold 가 하위 미열람 0 일 때 같이 풀리도록 한다(UI-10 조상 전파, 보고된 증상 수정).
+//   폴더 bold 는 externalChanges 맵 prefix 스캔으로 파생되므로, 형제 미열람 파일 키가 남아 있으면
+//   조상 폴더는 그대로 bold 유지된다(전파는 '하위 미열람 0' 일 때만 해제 — 정확한 토글).
 export function clearExternalChange(path, root) {
   if (!path) return;
   const r = normalizeRootType(root || store.rootType);
   const m = store.externalChanges[r];
-  if (m && m[path]) delete m[path];
+  if (!m) return;
+  if (m[path]) delete m[path];
+  for (const k of staleAncestorKeys(m, path)) delete m[k];
 }
 
 function applyArtifactChange(data) {

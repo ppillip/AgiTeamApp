@@ -201,12 +201,12 @@ export default {
         <span
           v-else
           class="flex items-center gap-[7px] rounded-[9px] border px-[13px] py-[7px] text-[13px] font-bold tracking-wide"
-          :class="pmConnected ? 'border-grn-tintbd bg-grn-tint text-grn' : 'border-line bg-line-soft text-ink-500'"
+          :class="pmActivity && pmActivity.active ? 'border-red-200 bg-red-50 text-red-600 animate-activity-blink' : (pmConnected ? 'border-grn-tintbd bg-grn-tint text-grn' : 'border-line bg-line-soft text-ink-500')"
+          :key="'pmblink-' + (pmRoom ? (pmRoom.activityBlinkKey || 0) : 0)"
           :title="pmConnected ? 'PM 방 실시간 연결됨' : 'PM surface 미발견(끊김)'"
         >
           <span class="h-[7px] w-[7px] rounded-full"
-                :key="'pmblink-' + (pmRoom ? (pmRoom.activityBlinkKey || 0) : 0)"
-                :class="[pmConnected ? 'bg-grn ring-[3px] ring-grn/20' : 'bg-ink-300', pmActivity && pmActivity.active ? 'animate-activity-blink' : '']"></span>
+                :class="pmActivity && pmActivity.active ? 'bg-red-500 ring-[3px] ring-red-500/20' : (pmConnected ? 'bg-grn ring-[3px] ring-grn/20' : 'bg-ink-300')"></span>
           {{ pmConnected ? "LIVE" : "끊김" }} · PM
         </span>
       </div>

@@ -230,6 +230,16 @@ pub trait WebguiRepository: Send + Sync {
 
     async fn create_message(&self, m: NewMessage) -> Result<MessageRow, RepoError>;
 
+    /// transcript 저장 전용(P2): `(provider, transcript_record_id)` 유니크 인덱스에
+    /// `INSERT ... ON CONFLICT DO NOTHING RETURNING` 으로 dedup SELECT + INSERT 2왕복을
+    /// **1왕복**으로 축소한다. 충돌(이미 저장됨)이면 `None` 반환 → 호출자는 publish 생략.
+    /// transcript_record_id 가 None 인 record 는 충돌 대상이 아니므로 항상 신규 INSERT 된다
+    /// (그 경우의 dedup 은 호출자가 raw_hash 사전체크로 처리).
+    async fn create_message_on_conflict_skip(
+        &self,
+        m: NewMessage,
+    ) -> Result<Option<MessageRow>, RepoError>;
+
     async fn touch_room_last_message(
         &self,
         room_id: &str,

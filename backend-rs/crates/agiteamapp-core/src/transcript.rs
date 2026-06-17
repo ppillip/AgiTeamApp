@@ -170,12 +170,13 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         let direction = if is_assistant { "inbound" } else { "outbound" };
         let raw_hash = compute_raw_hash(Some(&rec.provider), rec.record_id.as_deref(), role, text);
 
-        // dedup: record_id 우선, 없으면 (room, source, raw_hash)
-        if let Some(rid) = &rec.record_id {
-            if repo.find_message_by_record(&rec.provider, rid).await?.is_some() {
-                continue;
-            }
-        } else if repo.find_message_by_hash(room_id, TRANSCRIPT_SOURCE, &raw_hash).await?.is_some() {
+        // dedup (P2):
+        //  - record_id 있음 → 사전 SELECT 없이 아래 create_message_on_conflict_skip 의
+        //    INSERT ON CONFLICT 가 1왕복으로 처리(충돌 시 None 반환). dedup SELECT 제거.
+        //  - record_id 없음 → 충돌 인덱스 대상이 아니므로 여기서 raw_hash 사전체크 유지.
+        if rec.record_id.is_none()
+            && repo.find_message_by_hash(room_id, TRANSCRIPT_SOURCE, &raw_hash).await?.is_some()
+        {
             continue;
         }
         // bridge-dup: user(outbound) record 가 WebGUI 선저장 outbound(webgui/pm_bridge)와
@@ -207,8 +208,10 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
             None => repo.server_now().await?,
         };
 
-        let msg = repo
-            .create_message(NewMessage {
+        // P2: INSERT ON CONFLICT DO NOTHING RETURNING. 충돌(이미 저장됨)이면 None →
+        // touch/publish/카운트 모두 생략(중복 WS push 방지).
+        let inserted = repo
+            .create_message_on_conflict_skip(NewMessage {
                 room_id: room_id.to_string(),
                 agent_session_id: None,
                 correlation_id: correlation_id.clone(),
@@ -230,6 +233,9 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
                 occurred_at_iso: occurred,
             })
             .await?;
+        let Some(msg) = inserted else {
+            continue; // (provider, record_id) 중복 → 이미 저장됨, 건너뜀
+        };
         repo.touch_room_last_message(room_id, &msg.message_id, &msg.occurred_at, is_assistant)
             .await?;
 
