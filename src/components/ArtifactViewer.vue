@@ -336,15 +336,22 @@ export default {
     //   - 기존 '크게'(인라인 확대)·'채팅으로'·저장 동작과 독립.
     openInWindow() {
       if (!this.file) return;
-      const path = this.file.path || this.file.name || "file";
+      // 파일명/경로는 '평문'으로만 쓴다. 혹시 마크다운 렌더(<em> 등)나 HTML 이 섞여 들어와도
+      // URL/창이름이 깨지지 않도록 태그를 제거(방어). path/name 은 raw 문자열로 URLSearchParams 에 싣는다.
+      const plain = (s) => String(s ?? "").replace(/<[^>]*>/g, "");
+      const path = plain(this.file.path || this.file.name || "file");
+      const name = plain(this.file.name || "");
+      const ext = plain(this.file.ext || "");
       const winName = "agiteam-file-" + path.replace(/[^a-zA-Z0-9]+/g, "_");
       const params = new URLSearchParams();
       params.set("path", path);
       if (store.selectedProjectId) params.set("project_id", store.selectedProjectId);
       if (store.rootType) params.set("root_type", store.rootType);
-      if (this.file.name) params.set("name", this.file.name);
-      if (this.file.ext) params.set("ext", this.file.ext);
-      const win = window.open(`viewer.html?${params.toString()}`, winName);
+      if (name) params.set("name", name);
+      if (ext) params.set("ext", ext);
+      // 절대경로(/viewer.html)로 열어 항상 origin 기준(http://<host>/viewer.html)으로 풀리게 한다.
+      // 상대경로('viewer.html')는 현재 페이지 경로가 오염되면 엉뚱한 URL 로 폴백된다(버그 수정).
+      const win = window.open(`/viewer.html?${params.toString()}`, winName);
       if (win) win.focus(); // 팝업 차단 시 null — 조용히 무시(기존 동작과 동일)
     },
     // md 본문 내 .mermaid-block 들을 SVG 다이어그램으로 변환. 실패한 블록은 코드블록으로 폴백.
