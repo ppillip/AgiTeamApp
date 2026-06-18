@@ -45,4 +45,14 @@ class ArtifactWriteRequest(BaseModel):
     root_type: str | None = None
 
 
+class ArtifactCreateRequest(BaseModel):
+    """WG-ART-08 새파일 생성 요청 (DS-132 §4.1)."""
+    parent_path: str
+    filename: str
+    template: str = "empty"          # empty | markdown_basic | json_object
+    if_exists: str = "error"         # error | rename
+    project_id: str | None = None
+    root_type: str | None = None
+
+
 ArtifactNode.model_rebuild()

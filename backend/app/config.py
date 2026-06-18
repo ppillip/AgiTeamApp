@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     # 파일/렌더 제한 (DS-20 §13.5 / DS-40 §17.6)
     max_inline_bytes: int = 1_048_576          # 1 MiB: md inline 한계
     max_stream_bytes: int = 52_428_800         # 50 MiB: pdf stream 한계
+    max_upload_bytes: int = 26_214_400         # 25 MiB: 산출물 업로드 파일당 상한 (DS-132 §11 확정)
     max_tree_nodes: int = 2_000                # 트리 1회 응답 노드 상한
     max_tree_depth: int = 6
     render_timeout_seconds: int = 30

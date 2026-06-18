@@ -675,6 +675,104 @@ async fn artifacts_write(
     }
 }
 
+/// root_type 정규화·검증 (Python _normalize_root_type 정합). 미지정/빈값 → documents, 미지의 값 → 400.
+fn normalize_root_type(rt: Option<&str>) -> Result<String, ApiError> {
+    let r = rt.unwrap_or("").trim().to_lowercase();
+    if r.is_empty() {
+        return Ok("documents".to_string());
+    }
+    if matches!(r.as_str(), "documents" | "system" | "persona") {
+        Ok(r)
+    } else {
+        Err(ApiError::new("invalid_request", 400, "root_type must be one of: documents, system, persona"))
+    }
+}
+
+// WG-ART-08 새파일 생성 (DS-132 §4). 폴더 한정 JSON. 201 + {file, tree_refresh}.
+#[derive(Debug, Deserialize)]
+struct CreateBody {
+    parent_path: String,
+    filename: String,
+    #[serde(default = "default_template")]
+    template: String,
+    #[serde(default = "default_if_exists_error")]
+    if_exists: String,
+    project_id: Option<String>,
+    root_type: Option<String>,
+}
+fn default_template() -> String {
+    "empty".to_string()
+}
+fn default_if_exists_error() -> String {
+    "error".to_string()
+}
+
+async fn artifacts_create_file(
+    State(s): State<AppState>,
+    Json(body): Json<CreateBody>,
+) -> (StatusCode, Json<Value>) {
+    let rt = match normalize_root_type(body.root_type.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return err_response(e),
+    };
+    let svc = s.artifact_svc(body.project_id.as_deref(), Some(&rt));
+    match svc.create_file(Some(&body.parent_path), &body.filename, &body.template, &body.if_exists, &rt, 1_048_576) {
+        Ok(data) => ok_201(data),
+        Err(e) => err_response(e),
+    }
+}
+
+// WG-ART-09 파일 업로드 (DS-132 §5). 폴더 한정 multipart. 201 + {upload, file, tree_refresh}.
+async fn artifacts_upload(
+    State(s): State<AppState>,
+    mut mp: axum::extract::Multipart,
+) -> (StatusCode, Json<Value>) {
+    let mut project_id: Option<String> = None;
+    let mut root_type: Option<String> = None;
+    let mut parent_path: Option<String> = None;
+    let mut if_exists: Option<String> = None;
+    let mut client_upload_id: Option<String> = None;
+    let mut filename: Option<String> = None;
+    let mut data: Vec<u8> = Vec::new();
+    while let Ok(Some(field)) = mp.next_field().await {
+        match field.name() {
+            Some("project_id") => project_id = field.text().await.ok(),
+            Some("root_type") => root_type = field.text().await.ok(),
+            Some("parent_path") => parent_path = field.text().await.ok(),
+            Some("if_exists") => if_exists = field.text().await.ok(),
+            Some("client_upload_id") => client_upload_id = field.text().await.ok(),
+            Some("file") => {
+                filename = field.file_name().map(|s| s.to_string());
+                if let Ok(b) = field.bytes().await {
+                    data = b.to_vec();
+                }
+            }
+            _ => {}
+        }
+    }
+    let rt = match normalize_root_type(root_type.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return err_response(e),
+    };
+    let parent = parent_path.unwrap_or_default();
+    let if_exists = if_exists.unwrap_or_else(|| "rename".to_string());
+    let fname = filename.unwrap_or_default();
+    let svc = s.artifact_svc(project_id.as_deref(), Some(&rt));
+    match svc.upload_file(
+        Some(&parent),
+        &fname,
+        &data,
+        &if_exists,
+        &rt,
+        client_upload_id.as_deref(),
+        26_214_400,
+        1_048_576,
+    ) {
+        Ok(data) => ok_201(data),
+        Err(e) => err_response(e),
+    }
+}
+
 // WG-ART-07: 산출물/코드/페르소나 파일 삭제 (FE 우클릭 '삭제' 메뉴).
 // FE 계약(src/api/index.js deleteFile): POST /api/webgui/artifacts/delete
 //   body { project_id?, root_type?, path }. 응답 {ok:true,data:{deleted:true,path}}.
@@ -705,6 +803,57 @@ struct StreamQuery {
     root_type: Option<String>,
     #[serde(default)]
     variant: Option<String>,
+    // WG-ART-03D 다운로드 확장: download=1|true → Content-Disposition: attachment.
+    #[serde(default)]
+    download: Option<String>,
+    #[serde(default)]
+    filename: Option<String>,
+}
+
+fn is_truthy(v: Option<&str>) -> bool {
+    matches!(v.unwrap_or("").trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+/// 전체 percent-encoding (unreserved 외 모두 %xx). RFC 3986 unreserved 유지.
+fn pct_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// path 표시용 인코딩(슬래시 보존). Python quote(path, safe="/") 정합.
+fn pct_encode_path(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// RFC 6266/5987 attachment Content-Disposition (DS-132 §6.3).
+fn content_disposition(filename: &str) -> String {
+    let ascii: String = filename
+        .chars()
+        .map(|c| {
+            let n = c as u32;
+            if (32..127).contains(&n) && c != '"' && c != '\\' && c != '/' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ascii = ascii.trim();
+    let ascii = if ascii.is_empty() { "download" } else { ascii };
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{}", pct_encode(filename))
 }
 
 async fn artifacts_stream(
@@ -720,16 +869,43 @@ async fn artifacts_stream(
         Ok(v) => v,
         Err(e) => return err_response(e).into_response(),
     };
+    let is_download = is_truthy(q.download.as_deref());
+    // WG-ART-03D 다운로드명: filename override 사용 시 파일명 규칙 검증 + 확장자 동일 강제(§6.1).
+    let actual_name = abs.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let mut download_name = actual_name.clone();
+    if let Some(fname) = q.filename.as_deref() {
+        if !fname.trim().is_empty() {
+            let override_name = match svc.validate_filename(fname) {
+                Ok(v) => v,
+                Err(e) => return err_response(e).into_response(),
+            };
+            let actual_ext = actual_name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+            let override_ext = override_name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+            if override_ext != actual_ext {
+                return err_response(ApiError::new("invalid_path", 400, "Invalid artifact path.")).into_response();
+            }
+            download_name = override_name;
+        }
+    }
     let bytes = match std::fs::read(&abs) {
         Ok(b) => b,
         Err(_) => return err_response(ApiError::new("artifact_path_not_found", 404, "not found")).into_response(),
     };
-    let (mut start, mut end, mut status) = (0usize, size as usize - 1, StatusCode::OK);
+    // QI-WG-048: size==0(빈 파일, empty 템플릿 생성물 등) 다운로드 시 `size as usize - 1` 언더플로 →
+    // release 에서 usize::MAX 로 wrap → bytes[0..=usize::MAX] 슬라이스 OOB 패닉 → 연결 종료 버그.
+    // saturating_sub + 슬라이스 가드로 0바이트도 200 + Content-Length:0 으로 안전 반환(Python 동등).
+    let total = size as usize;
+    let (mut start, mut end, mut status) = (0usize, total.saturating_sub(1), StatusCode::OK);
     let mut resp_headers = vec![
         ("Accept-Ranges".to_string(), "bytes".to_string()),
         ("Content-Type".to_string(), mime.clone()),
         ("X-Content-Type-Options".to_string(), "nosniff".to_string()),
+        ("X-Artifact-Path".to_string(), pct_encode_path(&q.path)),
     ];
+    if is_download {
+        // 다운로드는 attachment 우선(html/svg 여도). RFC 6266 filename* 포함.
+        resp_headers.push(("Content-Disposition".to_string(), content_disposition(&download_name)));
+    }
     if mime == "text/html" || mime == "image/svg+xml" {
         resp_headers.push((
             "Content-Security-Policy".to_string(),
@@ -741,8 +917,9 @@ async fn artifacts_stream(
             let part = spec.split(',').next().unwrap_or("");
             let (s_str, e_str) = part.split_once('-').unwrap_or(("", ""));
             let s_val = s_str.trim().parse::<usize>().unwrap_or(0);
-            let e_val = e_str.trim().parse::<usize>().unwrap_or(size as usize - 1).min(size as usize - 1);
-            if s_val > e_val || s_val >= size as usize {
+            let e_val = e_str.trim().parse::<usize>().unwrap_or(total.saturating_sub(1)).min(total.saturating_sub(1));
+            // total==0(빈 파일) 또는 범위 위반 → 416 (Python: start>=size 동일 처리).
+            if total == 0 || s_val > e_val || s_val >= total {
                 return Response::builder()
                     .status(416)
                     .header("Content-Range", format!("bytes */{size}"))
@@ -755,7 +932,8 @@ async fn artifacts_stream(
             resp_headers.push(("Content-Range".to_string(), format!("bytes {start}-{end}/{size}")));
         }
     }
-    let slice = bytes[start..=end].to_vec();
+    // 빈 파일은 빈 본문(슬라이스 가드). 그 외에는 [start..=end].
+    let slice = if total == 0 { Vec::new() } else { bytes[start..=end].to_vec() };
     resp_headers.push(("Content-Length".to_string(), slice.len().to_string()));
     let mut builder = Response::builder().status(status);
     for (k, v) in resp_headers {
@@ -1027,6 +1205,13 @@ fn app(state: AppState) -> Router {
         .route("/api/webgui/artifacts/file", get(artifacts_file))
         .route("/api/webgui/artifacts/file/stream", get(artifacts_stream))
         .route("/api/webgui/artifacts/write", post(artifacts_write))
+        .route("/api/webgui/artifacts/create-file", post(artifacts_create_file))
+        // 업로드는 25 MiB 상한 정책을 핸들러가 검증(413). axum 기본 2MB 본문 제한을 넘겨
+        // 25 MiB 정상 업로드/26 MiB 초과 테스트가 핸들러까지 도달하도록 64 MiB 로 확장.
+        .route(
+            "/api/webgui/artifacts/upload",
+            post(artifacts_upload).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/api/webgui/artifacts/delete", post(artifacts_delete))
         .route("/api/webgui/message-attachments/images", post(attachment_upload))
         .route("/api/webgui/message-attachments/:attachment_id/preview", get(attachment_preview))

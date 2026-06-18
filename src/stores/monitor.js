@@ -105,6 +105,12 @@ export const store = reactive({
   contextMenu: { open: false, x: 0, y: 0, node: null },
   // 짧은 피드백 토스트(경로 복사/삭제 결과 등). tone: 'ok' | 'err'.
   toast: { show: false, text: "", tone: "ok" },
+
+  // 새로만들기 다이얼로그(WG-ART-08, DS-132 §4): 폴더 우클릭 → 파일명 입력 모달.
+  //   parentPath/parentName 은 대상 폴더(트리 노드 상대경로). busy=API 진행중, error=인라인 오류.
+  createDialog: { open: false, parentPath: null, parentName: "", filename: "", busy: false, error: "" },
+  // 파일업로드 진행 상태(WG-ART-09, DS-132 §5): 다중 선택 시 파일별 순차 호출 진행 표시.
+  uploadState: { active: false, total: 0, done: 0, currentName: "", progress: 0 },
 });
 
 // ── 파생 getter (computed 대용 함수) ─────────────────────────
@@ -871,6 +877,157 @@ export async function deleteArtifact(node) {
         : "삭제에 실패했습니다";
     showToast(msg, "err");
   }
+}
+
+// ── 새로만들기 / 업로드 / 다운로드 (WG-ART-08/09/03D, DS-132) ──────
+// RV-55 오류 envelope {ok:false,error:{code,message}} 의 code → 사용자 안내 문구.
+//   콘솔만 찍고 끝내지 않고 toast/inline 으로 사람이 읽을 메시지를 보여준다(DS-132 §에러처리).
+const ARTIFACT_ERR_MSG = {
+  artifact_already_exists: "같은 이름이 이미 있습니다",
+  file_too_large: "파일이 너무 큽니다 (25MiB 초과)",
+  unsupported_media_type: "허용되지 않는 형식입니다",
+  path_forbidden: "허용되지 않는 경로입니다",
+  artifact_hidden: "허용되지 않는 이름입니다",
+  symlink_forbidden: "허용되지 않는 경로입니다",
+  not_directory: "폴더가 아닙니다",
+  not_file: "파일이 아닙니다",
+  invalid_path: "잘못된 경로 또는 파일명입니다",
+  invalid_request: "요청이 올바르지 않습니다",
+  invalid_artifact_template: "템플릿과 확장자가 맞지 않습니다",
+  invalid_text_encoding: "텍스트 인코딩을 해석할 수 없습니다",
+  artifact_path_not_found: "대상 폴더를 찾을 수 없습니다",
+  artifact_write_failed: "저장에 실패했습니다",
+  artifact_storage_unavailable: "저장소를 사용할 수 없습니다",
+};
+function artifactErrorMessage(e, fallback) {
+  if (e instanceof ApiError) {
+    if (ARTIFACT_ERR_MSG[e.code]) return ARTIFACT_ERR_MSG[e.code];
+    if (e.status === 404 || e.status === 405) return "API가 아직 준비되지 않았습니다";
+    return e.message || fallback;
+  }
+  return fallback;
+}
+
+// 생성/업로드 후 부모 폴더를 펼치고 재조회해 새 항목을 즉시 노출(낙관 갱신).
+//   watcher 의 artifact_changed(created) 가 뒤따라 와도 동일 changed_path 중복은 무해(DS-132 §3).
+async function refreshParentDir(parentPath) {
+  const parent = parentPath || "";
+  if (parent) store.expanded[parent] = true; // 새 항목이 보이도록 폴더 펼침
+  invalidateDirCache(parent);
+  await refreshDirIfVisible(parent);
+}
+
+// 폴더 우클릭 → 새로만들기 다이얼로그 열기(파일명 입력). 폴더 노드만 허용.
+export function openCreateFileDialog(node) {
+  closeContextMenu();
+  if (!node || !node.isDir) return;
+  store.createDialog = { open: true, parentPath: node.path, parentName: node.name, filename: "", busy: false, error: "" };
+}
+export function closeCreateFileDialog() {
+  store.createDialog = { open: false, parentPath: null, parentName: "", filename: "", busy: false, error: "" };
+}
+
+// 새 파일 생성 제출(WG-ART-08). 성공 시 tree_refresh 기준 부모 갱신 + 새 파일 뷰어로 열기.
+//   if_exists=error: 중복이면 409 → 인라인 안내(이름 변경 유도, 다이얼로그 유지).
+export async function submitCreateFile() {
+  const d = store.createDialog;
+  const filename = (d.filename || "").trim();
+  if (!filename) { d.error = "파일명을 입력하세요."; return; }
+  if (/[\\/]/.test(filename)) { d.error = "파일명에 경로 구분자(/ \\)는 쓸 수 없습니다."; return; }
+  if (store.degraded) { d.error = "오프라인 상태에서는 만들 수 없습니다."; return; }
+  d.busy = true;
+  d.error = "";
+  const pid = store.selectedProjectId;
+  const root = store.rootType;
+  const parentPath = d.parentPath || "";
+  try {
+    const { file, treeRefresh } = await api.createArtifactFile({
+      projectId: pid,
+      rootType: root,
+      parentPath,
+      filename,
+      template: "empty",
+      ifExists: "error",
+    });
+    // 그 사이 프로젝트/탭 전환 → 부수효과 폐기(다이얼로그만 닫음)
+    if (store.selectedProjectId !== pid || store.rootType !== root) {
+      closeCreateFileDialog();
+      return;
+    }
+    await refreshParentDir((treeRefresh && treeRefresh.parent_path) ?? parentPath);
+    const newPath = (treeRefresh && treeRefresh.changed_path) || (file && file.path);
+    if (newPath) await openFile({ path: newPath, name: file?.name || filename, ext: file?.ext || null, isDir: false });
+    closeCreateFileDialog();
+    showToast("새 파일을 만들었습니다", "ok");
+  } catch (e) {
+    d.busy = false;
+    d.error = artifactErrorMessage(e, "파일을 만들지 못했습니다");
+  }
+}
+
+// 폴더 우클릭 → 파일업로드(WG-ART-09). 다중 선택 시 파일별로 순차 호출(진행 표시) + if_exists=rename.
+//   파일 picker 는 호출부(ArtifactContextMenu)가 열고 선택된 File 목록을 넘긴다.
+export async function uploadArtifactFiles(node, files) {
+  closeContextMenu();
+  if (!node || !node.isDir) return;
+  const list = Array.from(files || []).filter(Boolean);
+  if (!list.length) return;
+  if (store.degraded) { showToast("오프라인 상태에서는 업로드할 수 없습니다", "err"); return; }
+  const pid = store.selectedProjectId;
+  const root = store.rootType;
+  const parentPath = node.path || "";
+  store.uploadState = { active: true, total: list.length, done: 0, currentName: "", progress: 0 };
+  let ok = 0;
+  let failed = 0;
+  for (let i = 0; i < list.length; i++) {
+    const file = list[i];
+    store.uploadState.currentName = file.name || "파일";
+    store.uploadState.progress = 0;
+    showToast(`업로드 중… (${i + 1}/${list.length}) ${file.name || ""}`, "ok", 60000);
+    try {
+      await api.uploadArtifactFile({
+        projectId: pid,
+        rootType: root,
+        parentPath,
+        file,
+        ifExists: "rename",
+        onProgress: (p) => { store.uploadState.progress = Math.round(p * 100); },
+      });
+      ok++;
+    } catch (e) {
+      failed++;
+      showToast(`'${file.name || "파일"}' 업로드 실패 — ${artifactErrorMessage(e, "업로드 실패")}`, "err", 3200);
+    }
+    store.uploadState.done = i + 1;
+  }
+  store.uploadState = { active: false, total: 0, done: 0, currentName: "", progress: 0 };
+  // 프로젝트/탭이 그대로일 때만 부모 폴더 갱신
+  if (store.selectedProjectId === pid && store.rootType === root) {
+    await refreshParentDir(parentPath);
+  }
+  // 최종 결과 toast(전부 실패면 마지막 개별 오류 toast 를 덮지 않는다)
+  if (ok && !failed) showToast(`${ok}개 파일을 업로드했습니다`, "ok");
+  else if (ok && failed) showToast(`${ok}개 성공 · ${failed}개 실패`, "err", 3200);
+}
+
+// 파일 우클릭 → 다운로드(WG-ART-03D). 프론트 Blob 생성 금지: BE stream URL(download=1)을
+//   anchor 로 트리거해 BE 의 Content-Disposition 으로 저장(웹·Tauri 동일 동작, DS-132 §6/§8).
+export function downloadArtifact(node) {
+  closeContextMenu();
+  if (!node || node.isDir) return;
+  const path = node.path;
+  if (!path) return;
+  if (store.degraded) { showToast("오프라인 상태에서는 다운로드할 수 없습니다", "err"); return; }
+  const url = api.fileDownloadUrl(path, { projectId: store.selectedProjectId, rootType: store.rootType });
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = node.name || ""; // BE Content-Disposition 이 정본 — download 속성은 보조 힌트
+  a.rel = "noopener";
+  a.target = "_self";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  showToast("다운로드를 시작합니다", "ok");
 }
 
 // ── 액션 ────────────────────────────────────────────────────

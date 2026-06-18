@@ -154,6 +154,24 @@ def artifact_write_failed() -> WebguiError:
     return WebguiError("artifact_write_failed", 500, "Failed to write artifact.")
 
 
+# 산출물 컨텍스트 메뉴 신규 (WG-ART-08/09 / DS-132)
+def artifact_already_exists(details: dict | None = None) -> WebguiError:
+    return WebguiError("artifact_already_exists", 409, "An artifact already exists at the target path.", details)
+
+
+def invalid_artifact_template(detail: str | None = None) -> WebguiError:
+    d = {"reason": detail} if detail else None
+    return WebguiError("invalid_artifact_template", 422, "Template does not match the file extension.", d)
+
+
+def invalid_text_encoding() -> WebguiError:
+    return WebguiError("invalid_text_encoding", 422, "Uploaded text is not valid UTF-8.")
+
+
+def artifact_storage_unavailable() -> WebguiError:
+    return WebguiError("artifact_storage_unavailable", 503, "Artifact storage is unavailable.")
+
+
 # 산출물 변경 polling (WG-ART-04 / DS-40 §20.4)
 def invalid_pagination(msg: str = "Invalid pagination cursor.") -> WebguiError:
     return WebguiError("invalid_pagination", 422, msg)

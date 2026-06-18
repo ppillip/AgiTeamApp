@@ -3,6 +3,7 @@ import Icon from "./Icon.vue";
 import ArtifactTree from "./ArtifactTree.vue";
 import ArtifactViewer from "./ArtifactViewer.vue";
 import ArtifactContextMenu from "./ArtifactContextMenu.vue";
+import ArtifactCreateDialog from "./ArtifactCreateDialog.vue";
 import Toast from "./Toast.vue";
 import { store, loadTreeRoot, setRootType, clearAllExternalChanges } from "../stores/monitor.js";
 
@@ -20,7 +21,7 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 export default {
   name: "ArtifactPanel",
-  components: { Icon, ArtifactTree, ArtifactViewer, ArtifactContextMenu, Toast },
+  components: { Icon, ArtifactTree, ArtifactViewer, ArtifactContextMenu, ArtifactCreateDialog, Toast },
   // treeOnly: '크게'(인라인 확대) 모드에서 우측 패널을 트리만 표시(작은 뷰어 숨김).
   props: { treeOnly: { type: Boolean, default: false } },
   emits: ["expand"],
@@ -151,8 +152,9 @@ export default {
     <!-- 뷰어 (S-05) — 큰 뷰 모드에선 중앙(채팅 영역)으로 이동하므로 패널에선 숨김. '크게'는 전파. -->
     <ArtifactViewer v-if="!treeOnly" @expand="$emit('expand')" />
 
-    <!-- 트리 우클릭 컨텍스트 메뉴 + 피드백 토스트(WG-ART-07). fixed 라 패널 어디에 둬도 무방. -->
+    <!-- 트리 우클릭 컨텍스트 메뉴 + 새로만들기 다이얼로그 + 피드백 토스트(WG-ART-07/08, DS-132). fixed 라 패널 어디에 둬도 무방. -->
     <ArtifactContextMenu />
+    <ArtifactCreateDialog />
     <Toast />
   </aside>
 </template>

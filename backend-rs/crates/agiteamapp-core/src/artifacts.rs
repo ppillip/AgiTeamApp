@@ -6,11 +6,153 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::repo::ApiError;
 
+/// 유니코드 NFC 정규화 (Python unicodedata.normalize("NFC", ...) 정합, QI-WG-048).
+/// macOS FS 는 NFD 로 저장하는 경향이 있어 입력/표시명을 NFC 로 통일해 Python 과 동등화한다.
+fn nfc(s: &str) -> String {
+    s.nfc().collect()
+}
+
 fn err(code: &'static str, http: u16, msg: &str) -> ApiError {
     ApiError::new(code, http, msg)
+}
+
+/// 파일명 길이 상한 (문자 수 기준, DS-132 §4.2).
+const FILENAME_MAX_LEN: usize = 120;
+
+/// 업로드 허용 바이너리 확장자 (documents 루트에만, DS-132 §5.3).
+fn is_documents_binary_ext(ext: &str) -> bool {
+    matches!(ext, "pdf" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "docx" | "pptx")
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// 업로드 바이너리 magic bytes/signature 검증 (DS-132 §5.3, detect_format 정합).
+fn verify_signature(data: &[u8], ext: &str) -> bool {
+    match ext {
+        "pdf" => data.starts_with(b"%PDF-"),
+        "docx" | "pptx" => data.starts_with(b"PK"),
+        "png" => data.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "jpg" | "jpeg" => data.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "gif" => data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a"),
+        "webp" => data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP",
+        "svg" => {
+            let mut s = data;
+            if s.starts_with(b"\xef\xbb\xbf") {
+                s = &s[3..];
+            }
+            let start = s.iter().position(|&c| !c.is_ascii_whitespace()).unwrap_or(s.len());
+            let h = &s[start..];
+            let probe = &h[..h.len().min(1024)];
+            probe.starts_with(b"<?xml") || probe.starts_with(b"<svg") || contains_subslice(probe, b"<svg")
+        }
+        _ => true, // 텍스트/코드는 signature 검사 없음(decode 검증으로 대체)
+    }
+}
+
+/// 충돌 회피 후보명: name, "name (1).ext", ... 100회 (DS-132 §4.4).
+fn rename_candidates(name: &str) -> Vec<String> {
+    let mut out = vec![name.to_string()];
+    if let Some((stem, ext)) = name.rsplit_once('.') {
+        if !name.starts_with('.') && !stem.is_empty() && !ext.is_empty() {
+            for i in 1..=100 {
+                out.push(format!("{stem} ({i}).{ext}"));
+            }
+            return out;
+        }
+    }
+    for i in 1..=100 {
+        out.push(format!("{name} ({i})"));
+    }
+    out
+}
+
+fn first_free_name(parent_abs: &Path, name: &str) -> Result<String, ApiError> {
+    for cand in rename_candidates(name) {
+        if !parent_abs.join(&cand).exists() {
+            return Ok(cand);
+        }
+    }
+    Err(err("artifact_already_exists", 409, "An artifact already exists at the target path."))
+}
+
+/// O_CREAT|O_EXCL 원자 생성. error 모드 충돌 → 409, rename 모드 → 빈 이름 탐색.
+fn atomic_create(parent_abs: &Path, name: &str, data: &[u8], if_exists: &str) -> Result<String, ApiError> {
+    use std::io::Write;
+    let candidates = if if_exists == "error" { vec![name.to_string()] } else { rename_candidates(name) };
+    for cand in &candidates {
+        let target = parent_abs.join(cand);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(mut f) => {
+                f.write_all(data)
+                    .map_err(|_| err("artifact_write_failed", 500, "Failed to write artifact."))?;
+                return Ok(cand.clone());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if if_exists == "error" {
+                    return Err(err("artifact_already_exists", 409, "An artifact already exists at the target path."));
+                }
+                continue;
+            }
+            Err(_) => return Err(err("artifact_write_failed", 500, "Failed to write artifact.")),
+        }
+    }
+    Err(err("artifact_already_exists", 409, "An artifact already exists at the target path."))
+}
+
+/// temp 기록 → target atomic rename. error 모드는 O_EXCL 로 target 선점.
+fn atomic_upload(parent_abs: &Path, name: &str, data: &[u8], if_exists: &str, sha_hex: &str) -> Result<String, ApiError> {
+    use std::io::ErrorKind;
+    let final_name = if if_exists == "error" {
+        let target = parent_abs.join(name);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(_) => {}
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                return Err(err("artifact_already_exists", 409, "An artifact already exists at the target path."));
+            }
+            Err(_) => return Err(err("artifact_storage_unavailable", 503, "Artifact storage is unavailable.")),
+        }
+        name.to_string()
+    } else {
+        first_free_name(parent_abs, name)?
+    };
+    let target = parent_abs.join(&final_name);
+    let tmp = parent_abs.join(format!(".upload-{}.tmp", &sha_hex[..8.min(sha_hex.len())]));
+    let cleanup = |this_err: ApiError| -> ApiError {
+        let _ = fs::remove_file(&tmp);
+        if if_exists == "error" {
+            let _ = fs::remove_file(&target);
+        }
+        this_err
+    };
+    if fs::write(&tmp, data).is_err() {
+        return Err(cleanup(err("artifact_write_failed", 500, "Failed to write artifact.")));
+    }
+    if fs::rename(&tmp, &target).is_err() {
+        return Err(cleanup(err("artifact_write_failed", 500, "Failed to write artifact.")));
+    }
+    Ok(final_name)
+}
+
+/// FE 낙관 갱신 힌트 (DS-132 §3).
+fn tree_refresh(root_type: &str, parent_rel: &str, changed_rel: &str) -> Value {
+    let r = root_type.trim().to_lowercase();
+    let rt = if r.is_empty() { "documents".to_string() } else { r };
+    json!({
+        "root_type": rt,
+        "parent_path": parent_rel,
+        "changed_path": changed_rel,
+        "change_type": "created",
+    })
 }
 
 /// 산출물 서비스. root = <project_root>/<subdir> (documents|system|brain), display = 논리 라벨.
@@ -147,6 +289,8 @@ impl ArtifactService {
         if is_control(&path) {
             return Err(err("invalid_path", 400, "Invalid artifact path."));
         }
+        // 유니코드 NFC 정규화 (Python 정합, QI-WG-048). NFD 입력도 NFC 로 통일.
+        path = nfc(&path);
         // drive/UNC 차단
         let bytes = path.as_bytes();
         if (bytes.len() >= 3
@@ -628,6 +772,195 @@ impl ArtifactService {
         let mime = mime_of(&fe).ok_or_else(|| err("unsupported_media_type", 415, "Unsupported media type."))?;
         let size = fs::metadata(&rp.abs).map(|m| m.len()).unwrap_or(0);
         Ok((rp.abs, mime.to_string(), size))
+    }
+
+    // --- 컨텍스트 메뉴 신규 (WG-ART-08/09 / DS-132) ------------------------
+
+    /// 파일명 정책 검증 + 반환 (DS-132 §4.2). 위반 시 적절한 ApiError.
+    /// (NFC 정규화는 기존 resolve 와 동일하게 미적용 — Python 과의 미세 parity 갭은 보고서 기재.)
+    #[allow(clippy::unused_self)]
+    pub fn validate_filename(&self, filename: &str) -> Result<String, ApiError> {
+        if is_control(filename) {
+            return Err(err("invalid_path", 400, "Invalid artifact path."));
+        }
+        // 유니코드 NFC 정규화 (Python validate_filename 정합, QI-WG-048).
+        let n = nfc(filename);
+        if n.trim().is_empty() {
+            return Err(err("invalid_request", 400, "filename is required."));
+        }
+        if n.contains('/') || n.contains('\\') {
+            return Err(err("invalid_path", 400, "Invalid artifact path."));
+        }
+        let b = n.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return Err(err("invalid_path", 400, "Invalid artifact path."));
+        }
+        if n != n.trim() {
+            return Err(err("invalid_path", 400, "Invalid artifact path."));
+        }
+        if n.chars().count() > FILENAME_MAX_LEN {
+            return Err(err("invalid_path", 400, "Invalid artifact path."));
+        }
+        if n == "." || n == ".." {
+            return Err(err("invalid_path", 400, "Invalid artifact path."));
+        }
+        if n.starts_with('.') {
+            return Err(err("artifact_hidden", 403, "Hidden or restricted file."));
+        }
+        if is_secret_name(&n) {
+            return Err(err("artifact_hidden", 403, "Hidden or restricted file."));
+        }
+        Ok(n)
+    }
+
+    /// 폴더 한정 기능용: parent_path resolve 후 반드시 is_dir 강제 (DS-132 §7).
+    fn resolve_parent_dir(&self, parent_path: Option<&str>) -> Result<ResolvedPath, ApiError> {
+        let rp = self.resolve(parent_path)?;
+        if !rp.abs.exists() {
+            return Err(err("artifact_path_not_found", 404, "Artifact path not found."));
+        }
+        if !rp.abs.is_dir() {
+            return Err(err("not_directory", 422, "Target is not a directory."));
+        }
+        Ok(rp)
+    }
+
+    /// 생성/업로드 직후 WG-ART-02 ArtifactFile 전체 필드 반환 (축약 금지, DS-132 §3).
+    /// read_file 을 재사용해 Python/Rust 동일 스키마 보장. 1MiB 초과 텍스트는 메타+stream_url.
+    fn describe_written_file(&self, rel: &str, root_type: &str, max_inline: u64) -> Result<Value, ApiError> {
+        match self.read_file(rel, true, max_inline, Some(root_type)) {
+            Ok((data, _)) => Ok(data["file"].clone()),
+            Err(e) if e.code == "file_too_large" => {
+                let rp = self.resolve(Some(rel))?;
+                let name = rp.abs.file_name().unwrap().to_string_lossy().to_string();
+                let fe = fmt_ext(&name).unwrap_or_default();
+                let mime = mime_of(&fe).unwrap_or("application/octet-stream");
+                let mode = render_mode(&fe).unwrap_or("code");
+                let size = fs::metadata(&rp.abs).map(|m| m.len()).unwrap_or(0);
+                let rt = root_type.to_lowercase();
+                let qs = if !rt.is_empty() && rt != "documents" { format!("&root_type={rt}") } else { String::new() };
+                Ok(json!({
+                    "path": rp.rel,
+                    "name": name,
+                    "extension": fe,
+                    "mime_type": mime,
+                    "size_bytes": size,
+                    "render_mode": mode,
+                    "content_type": mime,
+                    "encoding": Value::Null,
+                    "content": Value::Null,
+                    "stream_url": format!("/api/webgui/artifacts/file/stream?path={}{}", urlencode(&rp.rel), qs),
+                    "converted_url": Value::Null,
+                    "download_allowed": false,
+                    "sanitized": false,
+                    "render_warnings": [],
+                    "language_hint": code_lang(&fe),
+                }))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// WG-ART-08 새파일 생성 (DS-132 §4). 폴더 한정. 반환 {file, tree_refresh}.
+    pub fn create_file(
+        &self,
+        parent_path: Option<&str>,
+        filename: &str,
+        template: &str,
+        if_exists: &str,
+        root_type: &str,
+        max_inline: u64,
+    ) -> Result<Value, ApiError> {
+        let parent = self.resolve_parent_dir(parent_path)?;
+        let name = self.validate_filename(filename)?;
+        let fe = fmt_ext(&name);
+        if !fe.as_deref().map(is_writable_ext).unwrap_or(false) {
+            return Err(err("unsupported_media_type", 415, "Unsupported file format."));
+        }
+        let fe = fe.unwrap();
+        if !matches!(template, "empty" | "markdown_basic" | "json_object") {
+            return Err(err("invalid_request", 400, "invalid template"));
+        }
+        if !matches!(if_exists, "error" | "rename") {
+            return Err(err("invalid_request", 400, "invalid if_exists"));
+        }
+        if template == "json_object" && fe != "json" {
+            return Err(err("invalid_artifact_template", 422, "json_object requires a .json extension"));
+        }
+        if template == "markdown_basic" && fe != "md" && fe != "markdown" {
+            return Err(err("invalid_artifact_template", 422, "markdown_basic requires a .md extension"));
+        }
+        let basename = name.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_else(|| name.clone());
+        let content = match template {
+            "markdown_basic" => format!("# {basename}\n"),
+            "json_object" => "{}\n".to_string(),
+            _ => String::new(),
+        };
+        let final_name = atomic_create(&parent.abs, &name, content.as_bytes(), if_exists)?;
+        let rel = if parent.rel.is_empty() { final_name.clone() } else { format!("{}/{}", parent.rel, final_name) };
+        let file = self.describe_written_file(&rel, root_type, max_inline)?;
+        Ok(json!({ "file": file, "tree_refresh": tree_refresh(root_type, &parent.rel, &rel) }))
+    }
+
+    /// WG-ART-09 파일 업로드 (DS-132 §5). 폴더 한정 + root_type 정책 + 크기/확장자/signature/decode.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_file(
+        &self,
+        parent_path: Option<&str>,
+        filename: &str,
+        data: &[u8],
+        if_exists: &str,
+        root_type: &str,
+        client_upload_id: Option<&str>,
+        max_upload: u64,
+        max_inline: u64,
+    ) -> Result<Value, ApiError> {
+        let r = root_type.trim().to_lowercase();
+        let rt = if r.is_empty() { "documents".to_string() } else { r };
+        if !matches!(if_exists, "error" | "rename") {
+            return Err(err("invalid_request", 400, "invalid if_exists"));
+        }
+        let parent = self.resolve_parent_dir(parent_path)?;
+        let name = self.validate_filename(filename)?;
+        if data.len() as u64 > max_upload {
+            return Err(err("file_too_large", 413, "File exceeds the allowed size."));
+        }
+        let fe = match fmt_ext(&name) {
+            Some(e) => e,
+            None => return Err(err("unsupported_media_type", 415, "Unsupported file format.")),
+        };
+        let is_binary = is_documents_binary_ext(&fe);
+        let allowed = if rt == "documents" {
+            is_writable_ext(&fe) || is_binary
+        } else {
+            is_writable_ext(&fe) && !is_binary
+        };
+        if !allowed {
+            return Err(err("unsupported_media_type", 415, "Unsupported file format."));
+        }
+        if is_binary {
+            if !verify_signature(data, &fe) {
+                return Err(err("unsupported_media_type", 415, "Unsupported file format."));
+            }
+        } else if std::str::from_utf8(data).is_err() {
+            return Err(err("invalid_text_encoding", 422, "Uploaded text is not valid UTF-8."));
+        }
+        let sha_hex: String = Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect();
+        let final_name = atomic_upload(&parent.abs, &name, data, if_exists, &sha_hex)?;
+        let rel = if parent.rel.is_empty() { final_name.clone() } else { format!("{}/{}", parent.rel, final_name) };
+        let file = self.describe_written_file(&rel, &rt, max_inline)?;
+        let mime = file["mime_type"].clone();
+        Ok(json!({
+            "upload": {
+                "client_upload_id": client_upload_id,
+                "filename": final_name,
+                "mime_type": mime,
+                "size_bytes": data.len(),
+                "sha256": sha_hex,
+            },
+            "file": file,
+            "tree_refresh": tree_refresh(&rt, &parent.rel, &rel),
+        }))
     }
 }
 

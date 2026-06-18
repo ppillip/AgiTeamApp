@@ -152,6 +152,71 @@ export function fileStreamUrl(path, variant = "original", projectId, rootType) {
   });
 }
 
+// WG-ART-08 (DS-132 §4) — 새 빈/템플릿 파일 생성(폴더 한정). 성공 201 → { file, tree_refresh }.
+//   parent_path 는 선택 프로젝트 root_type 서브트리 루트 기준 상대경로(빈 문자열이면 root).
+//   if_exists 기본 'error'(중복 시 409 artifact_already_exists). 응답 file 은 WG-ART-02 전체 필드.
+export async function createArtifactFile({
+  projectId,
+  rootType,
+  parentPath,
+  filename,
+  template = "empty",
+  ifExists = "error",
+}) {
+  const data = await http.post(`${P}/artifacts/create-file`, {
+    project_id: projectId || undefined,
+    root_type: rootType || undefined,
+    parent_path: parentPath ?? "",
+    filename,
+    template,
+    if_exists: ifExists,
+  });
+  return {
+    file: data?.file ? adaptFile(data.file) : null,
+    treeRefresh: data?.tree_refresh || null,
+  };
+}
+
+// WG-ART-09 (DS-132 §5) — 파일 업로드(폴더 한정, multipart, 1회 1파일 정본).
+//   다중 선택은 호출부가 파일별로 이 함수를 순차 반복 호출한다. if_exists 기본 'rename'.
+//   onProgress(0~1) 로 진행률 콜백. 성공 201 → { upload, file, tree_refresh }.
+export async function uploadArtifactFile({
+  projectId,
+  rootType,
+  parentPath,
+  file,
+  ifExists = "rename",
+  clientUploadId,
+  onProgress,
+}) {
+  const fd = new FormData();
+  if (projectId) fd.append("project_id", projectId);
+  if (rootType) fd.append("root_type", rootType);
+  fd.append("parent_path", parentPath ?? "");
+  fd.append("if_exists", ifExists);
+  if (clientUploadId) fd.append("client_upload_id", clientUploadId);
+  fd.append("file", file, file.name || "upload.bin");
+  const data = await uploadMultipart(`${P}/artifacts/upload`, fd, { onProgress });
+  return {
+    upload: data?.upload || null,
+    file: data?.file ? adaptFile(data.file) : null,
+    treeRefresh: data?.tree_refresh || null,
+  };
+}
+
+// WG-ART-03D (DS-132 §6) — 다운로드 URL(파일 한정). 기존 stream 에 download=1 확장.
+//   Content-Disposition: attachment 는 BE 가 결정(프론트 Blob 생성 금지, §8 Tauri 동등).
+//   anchor 네비게이션은 Authorization 헤더를 실을 수 없으므로 token 을 query 로 부착(mediaUrl).
+export function fileDownloadUrl(path, { projectId, rootType, filename } = {}) {
+  return mediaUrl(`${P}/artifacts/file/stream`, {
+    project_id: projectId || undefined,
+    root_type: rootType || undefined,
+    path,
+    download: 1,
+    filename: filename || undefined,
+  });
+}
+
 // WG-ART-04 — 산출물 변경 polling fallback (DS-40 §20). WebSocket(artifact_changed) 단절 중
 // 산출물 폴더 변경을 화면에 반영하기 위한 보강 경로. 반환 모델은 artifact_changed 의 data 와 동일.
 //   - after: 마지막 처리 cursor(`timestamp|artifact:<urlencoded path>`). 없으면 최근 변경 일부.

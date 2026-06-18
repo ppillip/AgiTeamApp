@@ -9,6 +9,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 regex = { workspace = true }
+# QI-WG-048: 한글 파일명 NFC 정규화(Python unicodedata.normalize("NFC", ...) 정합).
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true }
+unicode-normalization = "0.1"

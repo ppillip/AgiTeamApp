@@ -5,13 +5,15 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 
 from .. import errors
 from ..config import ROOT_TYPE_SUBDIR, get_settings
 from ..deps import require_auth
-from ..schemas.artifact import ArtifactWriteRequest
+from ..schemas.artifact import ArtifactCreateRequest, ArtifactWriteRequest
 from ..schemas.common import ok
 from ..services.artifact_service import ArtifactService
 
@@ -128,6 +130,65 @@ async def write_artifact(
     return ok(data)
 
 
+@router.post("/create-file", dependencies=[Depends(require_auth)])
+async def create_file(
+    request: Request,
+    body: ArtifactCreateRequest,
+    response: Response,
+):
+    """WG-ART-08 새파일 생성 (DS-132 §4). 폴더 한정. 201 + {file, tree_refresh}.
+
+    project_id·root_type 은 body 우선(write 와 동일 규약). parent_path 는 디렉토리여야 한다.
+    """
+    settings = get_settings()
+    rt = _normalize_root_type(body.root_type)
+    data = _svc(request, body.project_id, body.root_type).create_file(
+        body.parent_path,
+        body.filename,
+        template=body.template,
+        if_exists=body.if_exists,
+        root_type=rt,
+        max_inline_bytes=settings.max_inline_bytes,
+    )
+    response.status_code = 201
+    return ok(data)
+
+
+@router.post("/upload", dependencies=[Depends(require_auth)])
+async def upload_file(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    parent_path: str = Form(...),
+    project_id: str | None = Form(default=None),
+    root_type: str | None = Form(default=None),
+    if_exists: str = Form(default="rename"),
+    client_upload_id: str | None = Form(default=None),
+):
+    """WG-ART-09 파일 업로드 (DS-132 §5). 폴더 한정 multipart. 201 + {upload, file, tree_refresh}.
+
+    크기 상한(25 MiB) 초과는 메모리 적재 전 차단해 413 file_too_large 로 응답한다.
+    """
+    settings = get_settings()
+    rt = _normalize_root_type(root_type)
+    # 상한+1 만 읽어 초과를 메모리 적재 전 차단(413).
+    data = await file.read(settings.max_upload_bytes + 1)
+    if len(data) > settings.max_upload_bytes:
+        raise errors.file_too_large()
+    result = _svc(request, project_id, root_type).upload_file(
+        parent_path,
+        file.filename or "",
+        data,
+        if_exists=if_exists,
+        root_type=rt,
+        client_upload_id=client_upload_id,
+        max_upload_bytes=settings.max_upload_bytes,
+        max_inline_bytes=settings.max_inline_bytes,
+    )
+    response.status_code = 201
+    return ok(result)
+
+
 @router.get("/file", dependencies=[Depends(require_auth)])
 async def get_file(
     request: Request,
@@ -153,6 +214,23 @@ async def get_file(
     return ok(data)
 
 
+def _is_truthy(v: str | None) -> bool:
+    return (v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _content_disposition(filename: str) -> str:
+    """RFC 6266/5987 attachment Content-Disposition (DS-132 §6.3).
+
+    ASCII fallback(filename="...") + UTF-8 percent-encoding(filename*=UTF-8''...).
+    제어문자·경로구분자·따옴표 제거한 ascii 근사를 fallback 으로, 원본은 filename* 로 넣는다.
+    """
+    ascii_fallback = "".join(
+        c if (32 <= ord(c) < 127 and c not in '"\\/') else "_" for c in filename
+    ).strip() or "download"
+    enc = quote(filename, safe="")
+    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{enc}'
+
+
 @router.get("/file/stream", dependencies=[Depends(require_auth)])
 async def stream_file(
     request: Request,
@@ -160,13 +238,27 @@ async def stream_file(
     project_id: str | None = Query(default=None),
     root_type: str | None = Query(default=None),
     variant: str = Query(default="original"),
+    download: str | None = Query(default=None),
+    filename: str | None = Query(default=None),
 ):
     settings = get_settings()
     if variant == "preview":
         # pptx/docx 변환 preview 는 변환기 미구현 단계 -> render_pending (DS-40 §18.3)
         raise errors.WebguiError("render_pending", 202, "Conversion preview is not ready.")
 
-    abs_path, mime, size = _svc(request, project_id, root_type).open_stream(path, max_stream_bytes=settings.max_stream_bytes)
+    svc = _svc(request, project_id, root_type)
+    abs_path, mime, size = svc.open_stream(path, max_stream_bytes=settings.max_stream_bytes)
+
+    is_download = _is_truthy(download)
+    # WG-ART-03D 다운로드명: filename override 사용 시 파일명 규칙·secret 검증 + 확장자 동일 강제(§6.1).
+    download_name = abs_path.name
+    if filename is not None and filename.strip() != "":
+        override = svc.validate_filename(filename)
+        actual_ext = abs_path.name.rsplit(".", 1)[1].lower() if "." in abs_path.name else ""
+        override_ext = override.rsplit(".", 1)[1].lower() if "." in override else ""
+        if override_ext != actual_ext:
+            raise errors.invalid_path()
+        download_name = override
 
     range_header = request.headers.get("range")
     start, end = 0, size - 1
@@ -175,7 +267,11 @@ async def stream_file(
         "Accept-Ranges": "bytes",
         "Content-Type": mime,
         "X-Content-Type-Options": "nosniff",
+        "X-Artifact-Path": quote(path, safe="/"),
     }
+    if is_download:
+        # 다운로드는 attachment 우선(html/svg 여도). RFC 6266 filename* 포함.
+        headers["Content-Disposition"] = _content_disposition(download_name)
     # UI-06/07: html/svg 는 직접 탐색 시에도 스크립트가 앱 오리진에서 실행되지 않도록
     # CSP sandbox 강제(FE 는 sandbox iframe / <img> 로 렌더하므로 정상 표시에는 영향 없음).
     if mime in ("text/html", "image/svg+xml"):
