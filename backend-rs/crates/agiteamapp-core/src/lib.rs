@@ -26,7 +26,7 @@ pub use activity::{collect_runtime_activity, ActivityRegistry, RuntimeActivityCo
 pub use artifact_changes::ArtifactChangeBuffer;
 pub use artifacts::ArtifactService;
 pub use attachments::{detect_image, epoch_to_iso, AttachmentService};
-pub use discovery::{parse_tree, DiscoveryRegistry};
+pub use discovery::{DiscoveryRegistry, MuxSurface, MuxWorkspace};
 pub use event::{collect_event, event_to_dict, CollectEventRequest};
 pub use events::{EventPublisher, NoopPublisher};
 pub use hook::{collect_hook, HookCollectRequest};
@@ -262,6 +262,9 @@ mod tests {
         async fn submit(&self, _t: &PmTarget, _text: &str) -> Result<bool, ApiError> {
             Ok(self.submitted)
         }
+        async fn tree(&self) -> Result<Vec<crate::discovery::MuxWorkspace>, ApiError> {
+            Ok(vec![])
+        }
     }
 
     // --- hook ---
@@ -457,28 +460,8 @@ mod tests {
         assert_eq!(epoch_to_iso(0), "1970-01-01T00:00:00Z");
     }
 
-    #[test]
-    fn parse_tree_extracts_roles() {
-        let tree = concat!(
-            "└── workspace ws:2 \"Panthea\" [selected] ◀ active\n",
-            "    ├── surface surface:29 [terminal] \"제우스(PM)\" tty=ttys000\n",
-            "    ├── surface surface:30 [terminal] \"불칸(BE)\" tty=ttys001\n",
-            "    └── surface surface:31 [panel] \"메모(QA)\"\n"
-        );
-        let projects = parse_tree(tree);
-        assert_eq!(projects.len(), 1);
-        let p = &projects[0];
-        assert_eq!(p.project_id, "Panthea");
-        assert!(p.selected);
-        // panel(non-terminal) 제외 → PM, DeveloperBE 만
-        let roles: Vec<&str> = p.surfaces.iter().map(|s| s.role_id.as_str()).collect();
-        assert!(roles.contains(&"PM"));
-        assert!(roles.contains(&"DeveloperBE"));
-        assert!(!roles.contains(&"QA"));
-        let pm = p.surfaces.iter().find(|s| s.role_id == "PM").unwrap();
-        assert_eq!(pm.display_name, "제우스");
-        assert_eq!(pm.surface_id, "surface:29");
-    }
+    // NOTE: cmux tree 텍스트 파서(parse_tree)는 Phase 0 에서 agiteamapp-mux 어댑터로 이관됨.
+    // 해당 파서 검증은 crates/agiteamapp-mux/tests/parse_cmux_tree.rs 로 이동.
 
     // --- transcript parser ---
     #[test]

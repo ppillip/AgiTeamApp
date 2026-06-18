@@ -47,7 +47,7 @@ pub struct PmTarget {
     pub display_name: String,
 }
 
-/// cmux 멀티플렉서 포트 (outbound). agiteamapp-mux 가 구현.
+/// 멀티플렉서 포트 (outbound). agiteamapp-mux 가 구현. core 는 native(cmux/tmux) 포맷을 모른다.
 pub trait MuxPort: Send + Sync {
     /// 역할 surface 동적 해소(PM 포함 임의 역할). 미연결이면 None.
     async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError>;
@@ -55,6 +55,9 @@ pub trait MuxPort: Send + Sync {
     async fn ping(&self, target: &PmTarget) -> bool;
     /// 텍스트 제출(입력+Enter). 제출 성공 여부 반환.
     async fn submit(&self, target: &PmTarget, text: &str) -> Result<bool, ApiError>;
+    /// 멀티플렉서 인벤토리 조회. 어댑터가 native tree 를 파싱해 중립 추상 구조로 반환한다.
+    /// discovery 갱신의 단일 소스(직접 native 호출 금지). 미접근 더미는 빈 목록.
+    async fn tree(&self) -> Result<Vec<crate::discovery::MuxWorkspace>, ApiError>;
 }
 
 #[derive(Debug, Clone, Deserialize)]

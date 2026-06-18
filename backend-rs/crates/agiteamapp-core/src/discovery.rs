@@ -38,84 +38,25 @@ pub fn parse_title(title: &str) -> Option<(String, String)> {
     Some((if display.is_empty() { role.to_string() } else { display.to_string() }, role.to_string()))
 }
 
+/// 멀티플렉서 중립 추상 구조 (DS-70 Phase 0). core 는 cmux/tmux 의 **출력 포맷을 모른다**.
+/// 어댑터(agiteamapp-mux)가 native tree(예: `cmux tree`)를 파싱해 이 구조로 변환하고,
+/// core 는 이 구조만 받아 도메인 규칙(역할 인식·terminal 필터·연결상태)을 적용한다.
 #[derive(Debug, Clone)]
-pub struct DiscoveredSurface {
-    pub project_id: String,
-    pub role_id: String,
+pub struct MuxSurface {
     pub surface_id: String,
-    pub display_name: String,
-    pub workspace_id: String,
+    /// surface 표시 제목 원문(예: "제우스(PM)"). 역할 파싱은 core 의 parse_title 책임.
+    pub title: String,
+    /// 터미널 surface 여부. 비터미널(panel/split 등)은 core 가 제외한다.
+    pub is_terminal: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct DiscoveredProject {
-    pub project_id: String,
+pub struct MuxWorkspace {
     pub workspace_id: String,
-    pub workspace_title: String,
+    /// workspace 표시 제목(= project_id 의 현행 원천).
+    pub title: String,
     pub selected: bool,
-    pub surfaces: Vec<DiscoveredSurface>,
-}
-
-fn first_quoted(s: &str) -> Option<(String, usize)> {
-    let start = s.find('"')?;
-    let rest = &s[start + 1..];
-    let end = rest.find('"')?;
-    Some((rest[..end].to_string(), start + 1 + end + 1))
-}
-
-/// `cmux tree` 출력 → 프로젝트 목록 (인식된 역할 surface 가 있는 workspace).
-pub fn parse_tree(text: &str) -> Vec<DiscoveredProject> {
-    let mut projects: HashMap<String, DiscoveredProject> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
-    let mut cur_ws = String::new();
-    let mut cur_proj: Option<String> = None;
-    let mut cur_selected = false;
-
-    for line in text.lines() {
-        if let Some(idx) = line.find("workspace ") {
-            let after = &line[idx + "workspace ".len()..];
-            let ws_id = after.split_whitespace().next().unwrap_or("").to_string();
-            if let Some((title, _)) = first_quoted(after) {
-                cur_ws = ws_id;
-                cur_proj = Some(title.trim().to_string());
-                cur_selected = line.contains("◀ active");
-            }
-            continue;
-        }
-        if let Some(idx) = line.find("surface ") {
-            let Some(proj) = cur_proj.clone() else { continue };
-            let after = &line[idx + "surface ".len()..];
-            let surface_id = after.split_whitespace().next().unwrap_or("").to_string();
-            // bracket [...]
-            let bracket = after
-                .find('[')
-                .and_then(|b| after[b + 1..].find(']').map(|e| after[b + 1..b + 1 + e].to_string()))
-                .unwrap_or_default();
-            if !bracket.contains("terminal") {
-                continue;
-            }
-            let Some((title, _)) = first_quoted(after) else { continue };
-            let Some((display_name, role)) = parse_title(&title) else { continue };
-            let entry = projects.entry(proj.clone()).or_insert_with(|| {
-                order.push(proj.clone());
-                DiscoveredProject {
-                    project_id: proj.clone(),
-                    workspace_id: cur_ws.clone(),
-                    workspace_title: proj.clone(),
-                    selected: cur_selected,
-                    surfaces: vec![],
-                }
-            });
-            entry.surfaces.push(DiscoveredSurface {
-                project_id: proj.clone(),
-                role_id: role,
-                surface_id,
-                display_name,
-                workspace_id: cur_ws.clone(),
-            });
-        }
-    }
-    order.into_iter().filter_map(|k| projects.remove(&k)).collect()
+    pub surfaces: Vec<MuxSurface>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,37 +93,52 @@ impl DiscoveryRegistry {
         Self::default()
     }
 
-    /// tree 텍스트로 갱신. 미present 역할은 disconnected 처리.
-    pub fn refresh_from_tree(&self, tree_text: &str, now_epoch: i64) {
-        let projects = parse_tree(tree_text);
+    /// 어댑터가 변환한 추상 workspace 목록으로 갱신. 미present 역할은 disconnected 처리.
+    ///
+    /// 도메인 규칙(현행 parse_tree 거동 보존):
+    /// - terminal surface 만 채택(비터미널 제외)
+    /// - 제목에서 역할 인식되는 surface 만 채택(parse_title)
+    /// - project_id = workspace.title (현행 원천)
+    /// - proj_meta/selected 는 인식된 역할 surface 가 1개 이상인 workspace 에만 등록(lazy)
+    pub fn refresh_from_workspaces(&self, workspaces: &[MuxWorkspace], now_epoch: i64) {
         let mut inner = self.inner.lock().unwrap();
         inner.selected = None;
         let mut present: Vec<(String, String)> = Vec::new();
-        for proj in &projects {
-            inner.proj_meta.insert(
-                proj.project_id.clone(),
-                ProjMeta {
-                    workspace_id: proj.workspace_id.clone(),
-                    workspace_title: proj.workspace_title.clone(),
-                    selected: proj.selected,
-                },
-            );
-            if proj.selected {
-                inner.selected = Some(proj.project_id.clone());
-            }
-            for s in &proj.surfaces {
-                let key = (s.project_id.clone(), s.role_id.clone());
+        for ws in workspaces {
+            let project_id = ws.title.trim().to_string();
+            let mut registered = false;
+            for s in &ws.surfaces {
+                if !s.is_terminal {
+                    continue;
+                }
+                let Some((display_name, role)) = parse_title(&s.title) else { continue };
+                if !registered {
+                    // 첫 유효 surface 에서만 proj_meta/selected 등록(현행 lazy 생성과 동일).
+                    inner.proj_meta.insert(
+                        project_id.clone(),
+                        ProjMeta {
+                            workspace_id: ws.workspace_id.clone(),
+                            workspace_title: project_id.clone(),
+                            selected: ws.selected,
+                        },
+                    );
+                    if ws.selected {
+                        inner.selected = Some(project_id.clone());
+                    }
+                    registered = true;
+                }
+                let key = (project_id.clone(), role.clone());
                 present.push(key.clone());
                 inner.map.insert(
                     key,
                     SurfaceInfo {
-                        project_id: s.project_id.clone(),
-                        role_id: s.role_id.clone(),
+                        project_id: project_id.clone(),
+                        role_id: role,
                         surface_id: s.surface_id.clone(),
-                        display_name: s.display_name.clone(),
+                        display_name,
                         connection_state: "connected".into(),
                         last_seen_epoch: now_epoch,
-                        workspace_id: s.workspace_id.clone(),
+                        workspace_id: ws.workspace_id.clone(),
                     },
                 );
             }

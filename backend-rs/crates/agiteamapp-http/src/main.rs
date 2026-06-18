@@ -13,12 +13,12 @@ use agiteamapp_core::{
     message_to_dict, message_update_type, message_updates,
     runtime_status, send_message, ActivityRegistry, ApiError, ArtifactChangeBuffer,
     CollectEventRequest, CollectMessageRequest, DiscoveryRegistry, EventPublisher,
-    HookCollectRequest, RuntimeActivityCollectRequest,
+    HookCollectRequest, MuxPort, RuntimeActivityCollectRequest,
     parse_records, store_records, ArtifactService, SendMessageRequest, TranscriptHint,
     TranscriptPort, WebguiRepository,
 };
 use agiteamapp_db::PgRepository;
-use agiteamapp_mux::{CmuxAdapter, DummyMux, MuxAdapter};
+use agiteamapp_mux::{build_mux_adapter, MuxAdapter, MuxConfig};
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::header::CONTENT_TYPE;
@@ -1325,46 +1325,28 @@ async fn main() {
 
     let repo = PgRepository::connect(&database_url).await.expect("DB 연결 실패");
 
-    // cmux discovery: 백그라운드로 `cmux tree` 폴링 → connection_state/projects 갱신.
+    // discovery: 백그라운드로 mux.tree() 폴링 → connection_state/projects 갱신.
     let discovery = Arc::new(DiscoveryRegistry::new());
 
-    // mux 선택: AGITEAMAPP_MUX=cmux → 실 cmux(team CLI + discovery PM 해소), 그 외(기본) → dummy.
-    let mux = match std::env::var("AGITEAMAPP_MUX").as_deref() {
-        Ok("cmux") => {
-            let cmux_bin = std::env::var("AGITEAMAPP_CMUX_BIN")
-                .unwrap_or_else(|_| "/Applications/cmux.app/Contents/Resources/bin/cmux".to_string());
-            let projects_base = std::env::var("AGITEAMAPP_PROJECTS_BASE")
-                .unwrap_or_else(|_| "/Users/ppillip/Projects".to_string());
-            MuxAdapter::Cmux(CmuxAdapter {
-                cmux_bin,
-                projects_base,
-                discovery: Some(discovery.clone()),
-            })
-        }
-        _ => MuxAdapter::Dummy(DummyMux::default()),
-    };
+    // mux 선택+구성은 팩토리(agiteamapp-mux)가 전담. main 은 어댑터 선택 규칙·native 명령을 모른다.
+    // 선택 규칙 현행 보존: AGITEAMAPP_MUX=cmux → Cmux, 그 외(기본) → Dummy.
+    let mux_config = MuxConfig::from_env();
+    let mux = Arc::new(build_mux_adapter(&mux_config, Some(discovery.clone())));
     {
         let disc = discovery.clone();
-        let cmux_bin = std::env::var("AGITEAMAPP_CMUX_BIN")
-            .unwrap_or_else(|_| "/Applications/cmux.app/Contents/Resources/bin/cmux".to_string());
+        let mux_for_loop = mux.clone();
+        // 실시간성: discovery 폴링 기본 1000ms(AGITEAMAPP_DISCOVERY_POLL_MS 로 조정).
+        let poll_ms = mux_config.discovery_poll_ms;
         tokio::spawn(async move {
             loop {
-                if let Ok(out) = tokio::process::Command::new(&cmux_bin).arg("tree").output().await {
-                    if out.status.success() {
-                        let text = String::from_utf8_lossy(&out.stdout);
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs() as i64)
-                            .unwrap_or(0);
-                        disc.refresh_from_tree(&text, now);
-                    }
+                // 포트 경유 — native(cmux) 직접 호출 금지. tree() 가 Err 면 갱신 건너뜀(직전 상태 보존).
+                if let Ok(workspaces) = mux_for_loop.tree().await {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    disc.refresh_from_workspaces(&workspaces, now);
                 }
-                // 실시간성: discovery 폴링 1s (기존 5s → PM 응답 표시 지연 해소).
-                // 환경변수 AGITEAMAPP_DISCOVERY_POLL_MS 로 조정 가능(기본 1000ms).
-                let poll_ms = std::env::var("AGITEAMAPP_DISCOVERY_POLL_MS")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(1000);
                 tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
             }
         });
@@ -1397,7 +1379,7 @@ async fn main() {
         repo: Arc::new(repo),
         activity: Arc::new(ActivityRegistry::new()),
         hub: hub_for_watch,
-        mux: Arc::new(mux),
+        mux,
         discovery,
         changes,
         selected_project,

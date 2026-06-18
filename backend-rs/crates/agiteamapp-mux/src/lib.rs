@@ -7,16 +7,69 @@
 
 use std::sync::Arc;
 
-use agiteamapp_core::{ApiError, DiscoveryRegistry, MuxPort, PmTarget};
+use agiteamapp_core::{ApiError, DiscoveryRegistry, MuxPort, MuxSurface, MuxWorkspace, PmTarget};
 use tokio::process::Command;
 
-/// 안전 더미: 실 cmux 미접근. resolve/ping 성공, submit 은 설정값 반환(실 전송 없음).
+// ── cmux tree 텍스트 파서 (Phase 0: core/discovery.rs 에서 이관) ─────────────
+// cmux 의 `tree` 출력 텍스트 포맷은 어댑터(이 crate)만 안다. core 는 중립 추상
+// 구조(MuxWorkspace/MuxSurface)만 받는다. 역할 인식/terminal 필터는 core 책임이라
+// 여기서는 **구조만** 추출한다(모든 surface 를 is_terminal 플래그와 원문 제목으로).
+
+fn first_quoted(s: &str) -> Option<String> {
+    let start = s.find('"')?;
+    let rest = &s[start + 1..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// `cmux tree` 출력 → 중립 workspace 목록. 역할/terminal 필터는 적용하지 않는다.
+pub fn parse_cmux_tree(text: &str) -> Vec<MuxWorkspace> {
+    let mut out: Vec<MuxWorkspace> = Vec::new();
+    for line in text.lines() {
+        if let Some(idx) = line.find("workspace ") {
+            let after = &line[idx + "workspace ".len()..];
+            let ws_id = after.split_whitespace().next().unwrap_or("").to_string();
+            if let Some(title) = first_quoted(after) {
+                out.push(MuxWorkspace {
+                    workspace_id: ws_id,
+                    title: title.trim().to_string(),
+                    selected: line.contains("◀ active"),
+                    surfaces: vec![],
+                });
+            }
+            continue;
+        }
+        if let Some(idx) = line.find("surface ") {
+            let Some(ws) = out.last_mut() else { continue };
+            let after = &line[idx + "surface ".len()..];
+            let surface_id = after.split_whitespace().next().unwrap_or("").to_string();
+            // bracket [...] 내부의 surface 종류 토큰
+            let bracket = after
+                .find('[')
+                .and_then(|b| after[b + 1..].find(']').map(|e| after[b + 1..b + 1 + e].to_string()))
+                .unwrap_or_default();
+            let Some(title) = first_quoted(after) else { continue };
+            ws.surfaces.push(MuxSurface {
+                surface_id,
+                title,
+                is_terminal: bracket.contains("terminal"),
+            });
+        }
+    }
+    out
+}
+
+/// 안전 더미: 실 전송(submit) 미수행. resolve/ping 성공, submit 은 설정값 반환(실 전송 없음).
+/// 단, discovery(tree)는 동작 완전보존을 위해 실 cmux 를 폴링한다(아테나 Q1=ⓐ).
+/// 즉 '읽기(discovery)는 실제, 쓰기(submit)는 더미'로 기존 동작과 동일.
 pub struct DummyMux {
     pub submit_ok: bool,
+    /// discovery 폴링용 cmux 바이너리. 기존 동작(Dummy 모드도 실 cmux tree 폴링) 보존.
+    pub cmux_bin: String,
 }
 impl Default for DummyMux {
     fn default() -> Self {
-        Self { submit_ok: true }
+        Self { submit_ok: true, cmux_bin: MuxConfig::DEFAULT_CMUX_BIN.to_string() }
     }
 }
 impl MuxPort for DummyMux {
@@ -35,6 +88,22 @@ impl MuxPort for DummyMux {
         // 실 cmux 전송 없음 — 안전 더미.
         eprintln!("[mux:dummy] submit (no real delivery)");
         Ok(self.submit_ok)
+    }
+    async fn tree(&self) -> Result<Vec<MuxWorkspace>, ApiError> {
+        // 동작 완전보존(아테나 Q1=ⓐ): Dummy 모드도 기존처럼 실 cmux tree 로 discovery 를 폴링한다.
+        // 원본 discovery 루프의 직접 호출과 동등(cmux_bin 직접 실행, 비정상/실패는 Err → 갱신 skip).
+        // 누수 제거(Dummy=빈목록)는 별도 후속 피치로 분리.
+        match Command::new(&self.cmux_bin).arg("tree").output().await {
+            Ok(out) if out.status.success() => {
+                Ok(parse_cmux_tree(&String::from_utf8_lossy(&out.stdout)))
+            }
+            Ok(out) => Err(ApiError::new(
+                "mux_tree_failed",
+                502,
+                format!("cmux tree exit={:?}", out.status.code()),
+            )),
+            Err(e) => Err(ApiError::new("mux_tree_failed", 502, format!("cmux tree: {e}"))),
+        }
     }
 }
 
@@ -66,19 +135,16 @@ impl CmuxAdapter {
         }
         c
     }
-    /// Python pm_bridge._refresh_discovery 대응: `cmux tree` 출력으로 discovery 재해소.
+    /// Python pm_bridge._refresh_discovery 대응: 포트 tree() 로 discovery 재해소.
     /// cmux short ref 는 workspace-scoped 이므로 submit 직전 즉시 갱신해야 stale ref 회피.
     async fn refresh_discovery(&self) {
         let Some(disc) = &self.discovery else { return };
-        if let Ok(out) = self.cmux().arg("tree").output().await {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                disc.refresh_from_tree(&text, now);
-            }
+        if let Ok(workspaces) = self.tree().await {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            disc.refresh_from_workspaces(&workspaces, now);
         }
     }
     fn resolve_target(&self, project_id: &str, role: &str) -> Option<PmTarget> {
@@ -178,6 +244,23 @@ impl MuxPort for CmuxAdapter {
         self.verify_submitted(t).await;
         Ok(ok)
     }
+
+    async fn tree(&self) -> Result<Vec<MuxWorkspace>, ApiError> {
+        // `cmux tree` → 텍스트 파싱 → 중립 추상 구조. discovery 갱신의 단일 소스.
+        // 비정상 종료/spawn 실패는 Err 로 반환해 호출자가 갱신을 건너뛰게 한다
+        // (현행 `if status.success()` 가드와 동등 — 일시 실패 시 직전 상태 보존).
+        match self.cmux().arg("tree").output().await {
+            Ok(out) if out.status.success() => {
+                Ok(parse_cmux_tree(&String::from_utf8_lossy(&out.stdout)))
+            }
+            Ok(out) => Err(ApiError::new(
+                "mux_tree_failed",
+                502,
+                format!("cmux tree exit={:?}", out.status.code()),
+            )),
+            Err(e) => Err(ApiError::new("mux_tree_failed", 502, format!("cmux tree: {e}"))),
+        }
+    }
 }
 
 impl CmuxAdapter {
@@ -265,5 +348,77 @@ impl MuxPort for MuxAdapter {
             MuxAdapter::Dummy(m) => m.submit(t, text).await,
             MuxAdapter::Cmux(m) => m.submit(t, text).await,
         }
+    }
+    async fn tree(&self) -> Result<Vec<MuxWorkspace>, ApiError> {
+        match self {
+            MuxAdapter::Dummy(m) => m.tree().await,
+            MuxAdapter::Cmux(m) => m.tree().await,
+        }
+    }
+}
+
+// ── 어댑터 팩토리 (Phase 0) ─────────────────────────────────────────────────
+// main.rs 는 어댑터 선택 규칙을 모른다. env 해소 + 선택은 이 crate 가 전담한다.
+
+/// 멀티플렉서 종류. 선택 규칙은 현행 보존: AGITEAMAPP_MUX=cmux → Cmux, 그 외 → Dummy(기본).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MuxKind {
+    Dummy,
+    Cmux,
+}
+
+/// 어댑터 구성값. env 에서 해소(MuxConfig::from_env)하거나 직접 구성한다.
+#[derive(Debug, Clone)]
+pub struct MuxConfig {
+    pub kind: MuxKind,
+    pub cmux_bin: String,
+    pub projects_base: String,
+    pub discovery_poll_ms: u64,
+}
+
+impl MuxConfig {
+    /// 기본 cmux 바이너리 절대경로(현행 보존). PATH 의존 금지.
+    pub const DEFAULT_CMUX_BIN: &'static str = "/Applications/cmux.app/Contents/Resources/bin/cmux";
+    /// 기본 프로젝트 베이스(현행 보존).
+    pub const DEFAULT_PROJECTS_BASE: &'static str = "/Users/ppillip/Projects";
+    /// 기본 discovery 폴링 주기(ms, 현행 보존).
+    pub const DEFAULT_DISCOVERY_POLL_MS: u64 = 1000;
+
+    /// env 에서 구성. 의미는 현행과 동일:
+    /// - AGITEAMAPP_MUX == "cmux" → Cmux, 그 외(미설정 포함) → Dummy
+    /// - AGITEAMAPP_CMUX_BIN / AGITEAMAPP_PROJECTS_BASE / AGITEAMAPP_DISCOVERY_POLL_MS
+    pub fn from_env() -> Self {
+        let kind = match std::env::var("AGITEAMAPP_MUX").as_deref() {
+            Ok("cmux") => MuxKind::Cmux,
+            _ => MuxKind::Dummy,
+        };
+        let cmux_bin = std::env::var("AGITEAMAPP_CMUX_BIN")
+            .unwrap_or_else(|_| Self::DEFAULT_CMUX_BIN.to_string());
+        let projects_base = std::env::var("AGITEAMAPP_PROJECTS_BASE")
+            .unwrap_or_else(|_| Self::DEFAULT_PROJECTS_BASE.to_string());
+        let discovery_poll_ms = std::env::var("AGITEAMAPP_DISCOVERY_POLL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(Self::DEFAULT_DISCOVERY_POLL_MS);
+        Self { kind, cmux_bin, projects_base, discovery_poll_ms }
+    }
+}
+
+/// 구성값 + discovery 레지스트리로 어댑터를 만든다. main.rs 는 이 함수만 호출한다.
+pub fn build_mux_adapter(
+    config: &MuxConfig,
+    discovery: Option<Arc<DiscoveryRegistry>>,
+) -> MuxAdapter {
+    match config.kind {
+        MuxKind::Cmux => MuxAdapter::Cmux(CmuxAdapter {
+            cmux_bin: config.cmux_bin.clone(),
+            projects_base: config.projects_base.clone(),
+            discovery,
+        }),
+        MuxKind::Dummy => MuxAdapter::Dummy(DummyMux {
+            submit_ok: true,
+            // 동작 완전보존: Dummy 모드도 실 cmux 로 discovery 폴링(config 의 cmux_bin 사용).
+            cmux_bin: config.cmux_bin.clone(),
+        }),
     }
 }
