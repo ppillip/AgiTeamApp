@@ -1,0 +1,27 @@
+[
+  {
+    "message_id": "5fc03157-de35-4fe2-955a-3422c5f426ed",
+    "room_id": "9a232a44-e03d-457c-b7a4-6036724512d9",
+    "agent_session_id": null,
+    "correlation_id": null,
+    "role_id": "PM",
+    "surface_id": "surface:68",
+    "direction": "outbound",
+    "source": "transcript",
+    "message_type": "user_message",
+    "team_session_id": "20260613_072229",
+    "provider": "claude_code",
+    "transcript_path": "claude_code:5c1f8cd2-17f5-4713-b394-037294df80f3.jsonl",
+    "transcript_offset": "12445957",
+    "transcript_record_id": "23276144-8e60-4bc4-aabf-ae4e0bc08adf",
+    "raw_text": "이거 혹시 html 2 pptx 소스 같은거 찾은거 있어? 난 html 이 이쁘게 나온거 같은데.. pptx 로 니가 하니깐 밉구만.. \n이미지에서 왼쪽이 html 이고, 오른쪽이 pptx 야. 당연히 왼쪽 html 이 난 좋아.\n\n[Image: source: ~/Projects/BeanNote/.agiteam/webgui/uploads/images/upload-20260612T230804Z-194005c3.png]",
+    "normalized_text": "이거 혹시 html 2 pptx 소스 같은거 찾은거 있어? 난 html 이 이쁘게 나온거 같은데.. pptx 로 니가 하니깐 밉구만..\n이미지에서 왼쪽이 html 이고, 오른쪽이 pptx 야. 당연히 왼쪽 html 이 난 좋아.\n\n[Image: source: /Users/ppillip/Projects/BeanNote/.agiteam/webgui/uploads/images/upload-20260612T230804Z-194005c3.png]",
+    "raw_hash": "sha256:88ff0a2b619a8d0316db6209792e2ba979f0718d7e97b34b49fd912d4f304c4e",
+    "attachments_json": null,
+    "status": "sent",
+    "occurred_at": "2026-06-12 23:08:25.080000+00:00",
+    "recorded_at": "2026-06-12 23:08:47.943760+00:00",
+    "updated_at": "2026-06-12 23:08:47.943760+00:00",
+    "_kept_bridge_message_id": "5d46d4bf-0d53-4302-9682-4ba6116f47ae"
+  }
+]

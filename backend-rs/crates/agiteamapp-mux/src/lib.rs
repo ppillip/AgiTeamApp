@@ -1,19 +1,24 @@
 //! agiteamapp-mux — MuxPort 의 infra 구현 (infra adapter).
 //! 두 변형을 enum 으로 묶어 dyn 없이 디스패치한다:
-//!  - Dummy: 실 cmux 미접근. 안전 테스트/실 PM 미가동 환경용 (제출 흉내).
-//!  - Cmux : team CLI(=cmux facade) subprocess 로 PM surface 해소·ping·submit.
+//!  - Dummy: 실 전송(submit) 미수행. 안전 테스트/실 PM 미가동 환경용 (제출 흉내).
+//!  - Team : team CLI(facade) subprocess 로 PM surface 해소·ping·submit·tree.
 //!
-//! 레퍼런스: Python services/{pm_bridge,cmux_discovery}.py + bin/team.
+//! ★ transport 경계: backend 는 멀티플렉서(mux)를 **직접 호출하지 않는다**.
+//!   오직 team CLI(facade)만 호출하고, 실제 transport 선택·호출은 team 이 책임진다.
+//!   (backend-rs 안에 mux 바이너리 직접 호출 0건.)
+//!
+//! 레퍼런스: Python services/pm_bridge.py + bin/team(facade).
 
 use std::sync::Arc;
 
 use agiteamapp_core::{ApiError, DiscoveryRegistry, MuxPort, MuxSurface, MuxWorkspace, PmTarget};
 use tokio::process::Command;
 
-// ── cmux tree 텍스트 파서 (Phase 0: core/discovery.rs 에서 이관) ─────────────
-// cmux 의 `tree` 출력 텍스트 포맷은 어댑터(이 crate)만 안다. core 는 중립 추상
-// 구조(MuxWorkspace/MuxSurface)만 받는다. 역할 인식/terminal 필터는 core 책임이라
-// 여기서는 **구조만** 추출한다(모든 surface 를 is_terminal 플래그와 원문 제목으로).
+// ── tree 텍스트 파서 (Phase 0: core/discovery.rs 에서 이관) ───────────────────
+// `team list tree` 출력은 team facade 가 포워딩한 텍스트 포맷이다. 그 포맷은
+// 어댑터(이 crate)만 안다. core 는 중립 추상 구조(MuxWorkspace/MuxSurface)만 받는다.
+// 역할 인식/terminal 필터는 core 책임이라 여기서는 **구조만** 추출한다(모든 surface 를
+// is_terminal 플래그와 원문 제목으로). 함수명은 호환을 위해 보존한다(tests 의존).
 
 fn first_quoted(s: &str) -> Option<String> {
     let start = s.find('"')?;
@@ -22,8 +27,9 @@ fn first_quoted(s: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-/// `cmux tree` 출력 → 중립 workspace 목록. 역할/terminal 필터는 적용하지 않는다.
-pub fn parse_cmux_tree(text: &str) -> Vec<MuxWorkspace> {
+/// `team list tree` 출력 → 중립 workspace 목록.
+/// 역할/terminal 필터는 적용하지 않는다.
+pub fn parse_team_tree(text: &str) -> Vec<MuxWorkspace> {
     let mut out: Vec<MuxWorkspace> = Vec::new();
     for line in text.lines() {
         if let Some(idx) = line.find("workspace ") {
@@ -60,16 +66,17 @@ pub fn parse_cmux_tree(text: &str) -> Vec<MuxWorkspace> {
 }
 
 /// 안전 더미: 실 전송(submit) 미수행. resolve/ping 성공, submit 은 설정값 반환(실 전송 없음).
-/// 단, discovery(tree)는 동작 완전보존을 위해 실 cmux 를 폴링한다(아테나 Q1=ⓐ).
+/// 단, discovery(tree)는 동작 완전보존을 위해 team facade 로 폴링한다(아테나 Q1=ⓐ).
 /// 즉 '읽기(discovery)는 실제, 쓰기(submit)는 더미'로 기존 동작과 동일.
+/// (transport 직접 폴링 → team list tree 폴링으로 교체. transport 직접 호출 0건.)
 pub struct DummyMux {
     pub submit_ok: bool,
-    /// discovery 폴링용 cmux 바이너리. 기존 동작(Dummy 모드도 실 cmux tree 폴링) 보존.
-    pub cmux_bin: String,
+    /// discovery 폴링용 team CLI(facade). 기존 동작(Dummy 모드도 실 tree 폴링) 보존.
+    pub team_bin: String,
 }
 impl Default for DummyMux {
     fn default() -> Self {
-        Self { submit_ok: true, cmux_bin: MuxConfig::DEFAULT_CMUX_BIN.to_string() }
+        Self { submit_ok: true, team_bin: MuxConfig::default_team_bin() }
     }
 }
 impl MuxPort for DummyMux {
@@ -85,58 +92,49 @@ impl MuxPort for DummyMux {
         true
     }
     async fn submit(&self, _t: &PmTarget, _text: &str) -> Result<bool, ApiError> {
-        // 실 cmux 전송 없음 — 안전 더미.
+        // 실 전송 없음 — 안전 더미.
         eprintln!("[mux:dummy] submit (no real delivery)");
         Ok(self.submit_ok)
     }
     async fn tree(&self) -> Result<Vec<MuxWorkspace>, ApiError> {
-        // 동작 완전보존(아테나 Q1=ⓐ): Dummy 모드도 기존처럼 실 cmux tree 로 discovery 를 폴링한다.
-        // 원본 discovery 루프의 직접 호출과 동등(cmux_bin 직접 실행, 비정상/실패는 Err → 갱신 skip).
-        // 누수 제거(Dummy=빈목록)는 별도 후속 피치로 분리.
-        match Command::new(&self.cmux_bin).arg("tree").output().await {
+        // 동작 완전보존(아테나 Q1=ⓐ): Dummy 모드도 기존처럼 실 tree 로 discovery 를 폴링한다.
+        // 단 transport 직접 호출 금지 → team list tree(facade) 경유.
+        // 비정상/실패는 Err → 갱신 skip(직전 상태 보존).
+        match Command::new(&self.team_bin).arg("list").arg("tree").output().await {
             Ok(out) if out.status.success() => {
-                Ok(parse_cmux_tree(&String::from_utf8_lossy(&out.stdout)))
+                Ok(parse_team_tree(&String::from_utf8_lossy(&out.stdout)))
             }
             Ok(out) => Err(ApiError::new(
                 "mux_tree_failed",
                 502,
-                format!("cmux tree exit={:?}", out.status.code()),
+                format!("team list tree exit={:?}", out.status.code()),
             )),
-            Err(e) => Err(ApiError::new("mux_tree_failed", 502, format!("cmux tree: {e}"))),
+            Err(e) => Err(ApiError::new("mux_tree_failed", 502, format!("team list tree: {e}"))),
         }
     }
 }
 
-/// 실 cmux: team CLI 경유. project_id → project_root(AGITEAM_HOME) 매핑 후 team read/send.
-/// team 이 role "PM" → surface 해소를 내부 수행한다(bin/team resolve_role_surface_from_tree).
-pub struct CmuxAdapter {
-    /// cmux 바이너리. team facade(역할해소 workspace-scoped 함정) 대신 cmux 직접 호출.
-    /// 레퍼런스: Python cmux_adapter.py (cmux 직접 + workspace+surface 직접 지정 → cross-workspace).
-    pub cmux_bin: String,
-    /// (보존) project_id → 프로젝트 루트 베이스. 현재 cmux 직접 호출엔 미사용.
+/// 실 transport: team CLI(facade) 경유. surface 는 discovery 가 해소한 surface:NN 을 직접 지정한다.
+/// team 이 transport(mux) 선택·호출·멀티라인 제출(soft-newline)을 내부 처리한다.
+/// 레퍼런스: bin/team cmd_list/cmd_read/cmd_send.
+pub struct TeamAdapter {
+    /// team CLI(facade) 바이너리 경로. transport 직접 호출 대신 이 facade 만 부른다.
+    pub team_bin: String,
+    /// (보존) project_id → 프로젝트 루트 베이스. 현재 team 호출엔 미사용(대칭 유지).
     pub projects_base: String,
-    /// PM surface 해소 일원화: discovery.resolve(project, PM) 사용.
+    /// PM surface 해소 일원화: discovery.resolve(project, role) 사용.
     pub discovery: Option<Arc<DiscoveryRegistry>>,
 }
 
-impl CmuxAdapter {
-    /// cmux subprocess (Python _cmux_env 정합: 기존 env 상속 + CMUX_* setdefault).
-    fn cmux(&self) -> Command {
-        let mut c = Command::new(&self.cmux_bin);
-        for (k, v) in [
-            ("CMUX_PORT", "9330"),
-            ("CMUX_PORT_END", "9339"),
-            ("CMUX_PORT_RANGE", "10"),
-            ("CMUX_BUNDLE_ID", "com.cmuxterm.app"),
-        ] {
-            if std::env::var(k).is_err() {
-                c.env(k, v);
-            }
-        }
-        c
+impl TeamAdapter {
+    /// team subprocess. 특별한 env 주입 없음 — transport env(소켓 등)는 team/supervisor 책임.
+    /// (기존 transport env setdefault 제거: backend 는 transport env 를 모른다. 폴러도 team 을
+    ///  그것 없이 호출해 동작하므로 회귀 없음.)
+    fn team(&self) -> Command {
+        Command::new(&self.team_bin)
     }
     /// Python pm_bridge._refresh_discovery 대응: 포트 tree() 로 discovery 재해소.
-    /// cmux short ref 는 workspace-scoped 이므로 submit 직전 즉시 갱신해야 stale ref 회피.
+    /// short ref 는 workspace-scoped 이므로 submit 직전 즉시 갱신해야 stale ref 회피.
     async fn refresh_discovery(&self) {
         let Some(disc) = &self.discovery else { return };
         if let Ok(workspaces) = self.tree().await {
@@ -161,7 +159,7 @@ impl CmuxAdapter {
     }
 }
 
-impl MuxPort for CmuxAdapter {
+impl MuxPort for TeamAdapter {
     async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError> {
         if self.discovery.is_some() {
             // ① 송신 직전 refresh (workspace-scoped 재해소, Python pm_bridge:181).
@@ -176,151 +174,62 @@ impl MuxPort for CmuxAdapter {
         Ok(None)
     }
     async fn ping(&self, t: &PmTarget) -> bool {
-        // Python pm_bridge:206 read-screen ping 으로 liveness 확정.
-        // ★ 역할명 아님 — discovery 가 해소한 workspace+surface 를 cmux 에 직접 지정(cross-workspace).
-        let mut cmd = self.cmux();
-        cmd.arg("read-screen");
+        // team read --target surface:NN [--workspace ws] --lines 1 으로 liveness 확정.
+        // ★ 역할명 아님 — discovery 가 해소한 surface(+workspace)를 team 에 직접 지정.
+        let mut cmd = self.team();
+        cmd.arg("read").arg("--target").arg(&t.surface_id);
         if let Some(ws) = &t.workspace_id {
             cmd.arg("--workspace").arg(ws);
         }
-        cmd.arg("--surface").arg(&t.surface_id).arg("--lines").arg("1");
+        cmd.arg("--lines").arg("1");
         match cmd.output().await {
             Ok(o) => o.status.success(),
             Err(_) => false,
         }
     }
     async fn submit(&self, t: &PmTarget, text: &str) -> Result<bool, ApiError> {
-        // Python cmux_adapter.submit / bin/team cmd_send 정합:
-        //  - 단일라인 = send(text) + send-key Enter(제출)
-        //  - 멀티라인 = 각 줄 send, 줄 사이 send-key shift+enter(soft newline, 제출 안 함),
-        //               맨 끝에 send-key Enter(진짜 제출). cmux send 가 실제 개행을 그대로
-        //               흘려보내 에이전트 TUI 가 줄마다 제출로 오인하는 것을 막는다.
-        // workspace+surface 직접 지정(역할명 아님) → 어느 워크스페이스에서 떠도 PM 에 닿는다.
-        //
-        // ★ 제출 누락 버그 수정: send → send-key 를 간격 없이 백투백 실행하면 에이전트 TUI
-        //   (Claude Code·Codex)가 주입 텍스트를 입력위젯에 렌더하기 전에 Enter 가 도착해
-        //   '빈 입력 제출(무효) + 텍스트만 남음'이 된다. team(셸 서브프로세스)·Python 은
-        //   자연 스폰 간격이 있어 안 터지지만 tokio 백투백은 너무 빠르다. 텍스트 주입 후
-        //   settle 지연을 두고 Enter 를 보낸다(기본 120ms, AGITEAMAPP_SUBMIT_SETTLE_MS).
-        let settle_ms = std::env::var("AGITEAMAPP_SUBMIT_SETTLE_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(200); // 기본 200ms (TUI 렌더 settle, 유저 지시 상향)
-        let settle = || tokio::time::sleep(std::time::Duration::from_millis(settle_ms));
+        // team send 가 입력+제출을 원자적으로 처리한다(멀티라인 soft-newline 분해는 team 책임).
+        // backend 는 한 줄(team send --target surface:NN --text <text>)만 호출한다.
+        //  - 과거 transport 직접 호출 시의 shift+enter/Enter 수동 분해·settle 지연은 전부 제거.
+        //    그 책임은 이제 team facade(bin/team cmd_send) 안에 있다.
+        let mut c = self.team();
+        c.arg("send").arg("--target").arg(&t.surface_id).arg("--text").arg(text);
         eprintln!(
-            "[mux:submit] surface={} ws={:?} lines={} settle={}ms",
+            "[mux:team:send] surface={} ws={:?} lines={}",
             t.surface_id,
             t.workspace_id,
-            text.split('\n').count(),
-            settle_ms
+            text.split('\n').count()
         );
-
-        // \r\n / \r 정규화 후 줄 분해.
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        let lines: Vec<&str> = normalized.split('\n').collect();
-
-        if lines.len() <= 1 {
-            if !self.send_text(t, text).await? {
-                return Ok(false);
+        match c.output().await {
+            Ok(o) => {
+                if !o.status.success() {
+                    eprintln!(
+                        "[mux:team:send] surface={} FAILED exit={:?} / {}",
+                        t.surface_id,
+                        o.status.code(),
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    );
+                }
+                Ok(o.status.success())
             }
-            settle().await; // TUI 렌더 settle 후 제출
-            let ok = self.send_key(t, "Enter").await?;
-            self.verify_submitted(t).await;
-            return Ok(ok);
+            Err(e) => Err(ApiError::new("send_failed", 502, format!("team send: {e}"))),
         }
-
-        // 멀티라인: 줄 사이 shift+enter, 끝에 Enter
-        for (i, line) in lines.iter().enumerate() {
-            if i > 0 && !self.send_key(t, "shift+enter").await? {
-                return Ok(false);
-            }
-            // 빈 줄은 shift+enter 로 이미 줄바꿈됨 → cmux send "" 회피
-            if !line.is_empty() && !self.send_text(t, line).await? {
-                return Ok(false);
-            }
-        }
-        settle().await;
-        let ok = self.send_key(t, "Enter").await?;
-        self.verify_submitted(t).await;
-        Ok(ok)
     }
 
     async fn tree(&self) -> Result<Vec<MuxWorkspace>, ApiError> {
-        // `cmux tree` → 텍스트 파싱 → 중립 추상 구조. discovery 갱신의 단일 소스.
+        // `team list tree`(전체 tree) → 텍스트 파싱 → 중립 추상 구조. discovery 갱신의 단일 소스.
         // 비정상 종료/spawn 실패는 Err 로 반환해 호출자가 갱신을 건너뛰게 한다
         // (현행 `if status.success()` 가드와 동등 — 일시 실패 시 직전 상태 보존).
-        match self.cmux().arg("tree").output().await {
+        match self.team().arg("list").arg("tree").output().await {
             Ok(out) if out.status.success() => {
-                Ok(parse_cmux_tree(&String::from_utf8_lossy(&out.stdout)))
+                Ok(parse_team_tree(&String::from_utf8_lossy(&out.stdout)))
             }
             Ok(out) => Err(ApiError::new(
                 "mux_tree_failed",
                 502,
-                format!("cmux tree exit={:?}", out.status.code()),
+                format!("team list tree exit={:?}", out.status.code()),
             )),
-            Err(e) => Err(ApiError::new("mux_tree_failed", 502, format!("cmux tree: {e}"))),
-        }
-    }
-}
-
-impl CmuxAdapter {
-    /// `cmux send [--workspace ws] --surface X -- <text>` (텍스트 입력, 제출 안 함).
-    async fn send_text(&self, t: &PmTarget, text: &str) -> Result<bool, ApiError> {
-        let mut c = self.cmux();
-        c.arg("send");
-        if let Some(ws) = &t.workspace_id {
-            c.arg("--workspace").arg(ws);
-        }
-        // `--` 로 text 가 flag 로 오인되는 것 방지 (cmux send [flags] [--] <text>).
-        c.arg("--surface").arg(&t.surface_id).arg("--").arg(text);
-        match c.output().await {
-            Ok(o) => {
-                // ② 진단: 텍스트 주입 명령 결과(운영 로그 가시화).
-                eprintln!("[mux:send] surface={} rc={}", t.surface_id, o.status.success());
-                Ok(o.status.success())
-            }
-            Err(e) => Err(ApiError::new("send_failed", 502, format!("cmux send: {e}"))),
-        }
-    }
-
-    /// `cmux send-key [--workspace ws] --surface X <key>` (Enter / shift+enter 등).
-    async fn send_key(&self, t: &PmTarget, key: &str) -> Result<bool, ApiError> {
-        let mut c = self.cmux();
-        c.arg("send-key");
-        if let Some(ws) = &t.workspace_id {
-            c.arg("--workspace").arg(ws);
-        }
-        c.arg("--surface").arg(&t.surface_id).arg(key);
-        match c.output().await {
-            Ok(o) => {
-                // ② 진단: 제출(Enter)·soft newline 키 전송 결과.
-                eprintln!("[mux:send-key] surface={} key={} rc={}", t.surface_id, key, o.status.success());
-                Ok(o.status.success())
-            }
-            Err(e) => Err(ApiError::new("send_failed", 502, format!("cmux send-key: {e}"))),
-        }
-    }
-
-    /// ④ 제출 검증: 제출 직후 입력란을 읽어 정체 텍스트 유무를 로그로 남긴다(진단용).
-    /// AGITEAMAPP_SUBMIT_VERIFY=1 일 때만 동작(평상시 비용 0).
-    async fn verify_submitted(&self, t: &PmTarget) {
-        if std::env::var("AGITEAMAPP_SUBMIT_VERIFY").ok().as_deref() != Some("1") {
-            return;
-        }
-        let mut c = self.cmux();
-        c.arg("read-screen");
-        if let Some(ws) = &t.workspace_id {
-            c.arg("--workspace").arg(ws);
-        }
-        c.arg("--surface").arg(&t.surface_id).arg("--lines").arg("3");
-        if let Ok(o) = c.output().await {
-            let screen = String::from_utf8_lossy(&o.stdout);
-            // 입력 프롬프트 줄(❯) 뒤에 내용이 남았는지 대략 판별.
-            let stuck = screen.lines().any(|l| {
-                let t = l.trim_start();
-                t.starts_with('❯') && t.trim_start_matches('❯').trim().len() > 0
-            });
-            eprintln!("[mux:verify] surface={} input_stuck={}", t.surface_id, stuck);
+            Err(e) => Err(ApiError::new("mux_tree_failed", 502, format!("team list tree: {e}"))),
         }
     }
 }
@@ -328,31 +237,31 @@ impl CmuxAdapter {
 /// dyn 회피용 enum 디스패처. http AppState 가 보유.
 pub enum MuxAdapter {
     Dummy(DummyMux),
-    Cmux(CmuxAdapter),
+    Team(TeamAdapter),
 }
 impl MuxPort for MuxAdapter {
     async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError> {
         match self {
             MuxAdapter::Dummy(m) => m.resolve_role(project_id, role).await,
-            MuxAdapter::Cmux(m) => m.resolve_role(project_id, role).await,
+            MuxAdapter::Team(m) => m.resolve_role(project_id, role).await,
         }
     }
     async fn ping(&self, t: &PmTarget) -> bool {
         match self {
             MuxAdapter::Dummy(m) => m.ping(t).await,
-            MuxAdapter::Cmux(m) => m.ping(t).await,
+            MuxAdapter::Team(m) => m.ping(t).await,
         }
     }
     async fn submit(&self, t: &PmTarget, text: &str) -> Result<bool, ApiError> {
         match self {
             MuxAdapter::Dummy(m) => m.submit(t, text).await,
-            MuxAdapter::Cmux(m) => m.submit(t, text).await,
+            MuxAdapter::Team(m) => m.submit(t, text).await,
         }
     }
     async fn tree(&self) -> Result<Vec<MuxWorkspace>, ApiError> {
         match self {
             MuxAdapter::Dummy(m) => m.tree().await,
-            MuxAdapter::Cmux(m) => m.tree().await,
+            MuxAdapter::Team(m) => m.tree().await,
         }
     }
 }
@@ -360,47 +269,60 @@ impl MuxPort for MuxAdapter {
 // ── 어댑터 팩토리 (Phase 0) ─────────────────────────────────────────────────
 // main.rs 는 어댑터 선택 규칙을 모른다. env 해소 + 선택은 이 crate 가 전담한다.
 
-/// 멀티플렉서 종류. 선택 규칙은 현행 보존: AGITEAMAPP_MUX=cmux → Cmux, 그 외 → Dummy(기본).
+/// 멀티플렉서 종류. 선택 규칙: AGITEAMAPP_MUX == "dummy" → Dummy, 그 외(미설정·임의값·레거시 포함) → Team(기본).
+/// (backend 는 transport 를 모른다 — 실제 transport 선택·호출은 team facade 가 한다. 런처가
+///  레거시 값으로 떠 있어도 backend 는 Team 으로 정상 동작한다.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MuxKind {
     Dummy,
-    Cmux,
+    Team,
 }
 
 /// 어댑터 구성값. env 에서 해소(MuxConfig::from_env)하거나 직접 구성한다.
 #[derive(Debug, Clone)]
 pub struct MuxConfig {
     pub kind: MuxKind,
-    pub cmux_bin: String,
+    pub team_bin: String,
     pub projects_base: String,
     pub discovery_poll_ms: u64,
 }
 
 impl MuxConfig {
-    /// 기본 cmux 바이너리 절대경로(현행 보존). PATH 의존 금지.
-    pub const DEFAULT_CMUX_BIN: &'static str = "/Applications/cmux.app/Contents/Resources/bin/cmux";
     /// 기본 프로젝트 베이스(현행 보존).
     pub const DEFAULT_PROJECTS_BASE: &'static str = "/Users/ppillip/Projects";
+    /// 기본 프로젝트 id(team_bin 기본 경로 합성용. AGITEAMAPP_PROJECT_ID 로 재정의).
+    pub const DEFAULT_PROJECT_ID: &'static str = "Panthea";
     /// 기본 discovery 폴링 주기(ms, 현행 보존).
     pub const DEFAULT_DISCOVERY_POLL_MS: u64 = 1000;
 
-    /// env 에서 구성. 의미는 현행과 동일:
-    /// - AGITEAMAPP_MUX == "cmux" → Cmux, 그 외(미설정 포함) → Dummy
-    /// - AGITEAMAPP_CMUX_BIN / AGITEAMAPP_PROJECTS_BASE / AGITEAMAPP_DISCOVERY_POLL_MS
+    /// team CLI(facade) 기본 경로: <projects_base>/<project_id>/bin/team.
+    /// (supervisor 의 team_bin = <project_dir>/bin/team 컨벤션과 동일.)
+    pub fn default_team_bin() -> String {
+        let base = std::env::var("AGITEAMAPP_PROJECTS_BASE")
+            .unwrap_or_else(|_| Self::DEFAULT_PROJECTS_BASE.to_string());
+        let project = std::env::var("AGITEAMAPP_PROJECT_ID")
+            .unwrap_or_else(|_| Self::DEFAULT_PROJECT_ID.to_string());
+        format!("{}/{}/bin/team", base.trim_end_matches('/'), project)
+    }
+
+    /// env 에서 구성. 의미:
+    /// - AGITEAMAPP_MUX == "dummy" → Dummy, 그 외(미설정·임의값·레거시 포함) → Team(기본)
+    /// - AGITEAMAPP_TEAM_BIN(우선) 또는 <projects_base>/<project_id>/bin/team
+    /// - AGITEAMAPP_PROJECTS_BASE / AGITEAMAPP_DISCOVERY_POLL_MS
     pub fn from_env() -> Self {
         let kind = match std::env::var("AGITEAMAPP_MUX").as_deref() {
-            Ok("cmux") => MuxKind::Cmux,
-            _ => MuxKind::Dummy,
+            Ok("dummy") => MuxKind::Dummy,
+            _ => MuxKind::Team,
         };
-        let cmux_bin = std::env::var("AGITEAMAPP_CMUX_BIN")
-            .unwrap_or_else(|_| Self::DEFAULT_CMUX_BIN.to_string());
         let projects_base = std::env::var("AGITEAMAPP_PROJECTS_BASE")
             .unwrap_or_else(|_| Self::DEFAULT_PROJECTS_BASE.to_string());
+        let team_bin = std::env::var("AGITEAMAPP_TEAM_BIN")
+            .unwrap_or_else(|_| Self::default_team_bin());
         let discovery_poll_ms = std::env::var("AGITEAMAPP_DISCOVERY_POLL_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(Self::DEFAULT_DISCOVERY_POLL_MS);
-        Self { kind, cmux_bin, projects_base, discovery_poll_ms }
+        Self { kind, team_bin, projects_base, discovery_poll_ms }
     }
 }
 
@@ -410,15 +332,15 @@ pub fn build_mux_adapter(
     discovery: Option<Arc<DiscoveryRegistry>>,
 ) -> MuxAdapter {
     match config.kind {
-        MuxKind::Cmux => MuxAdapter::Cmux(CmuxAdapter {
-            cmux_bin: config.cmux_bin.clone(),
+        MuxKind::Team => MuxAdapter::Team(TeamAdapter {
+            team_bin: config.team_bin.clone(),
             projects_base: config.projects_base.clone(),
             discovery,
         }),
         MuxKind::Dummy => MuxAdapter::Dummy(DummyMux {
             submit_ok: true,
-            // 동작 완전보존: Dummy 모드도 실 cmux 로 discovery 폴링(config 의 cmux_bin 사용).
-            cmux_bin: config.cmux_bin.clone(),
+            // 동작 완전보존: Dummy 모드도 team facade 로 discovery 폴링(config 의 team_bin 사용).
+            team_bin: config.team_bin.clone(),
         }),
     }
 }

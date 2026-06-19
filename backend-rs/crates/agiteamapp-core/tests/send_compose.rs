@@ -1,4 +1,4 @@
-//! WG-MSG-06 cmux 제출 텍스트 합성 검증 (compose_submit_text).
+//! WG-MSG-06 mux 제출 텍스트 합성 검증 (compose_submit_text).
 
 use agiteamapp_core::send::compose_submit_text;
 

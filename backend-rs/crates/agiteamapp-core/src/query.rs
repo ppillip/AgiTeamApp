@@ -374,14 +374,14 @@ pub async fn mark_read<R: WebguiRepository>(
 }
 
 /// GET /api/webgui/projects → {selected_project_id, projects: ProjectSummary[]}.
-/// cmux discovery 미포팅 → DB(방 보유 프로젝트) 기준 (QI-WG-021 경로).
+/// mux discovery 미포팅 → DB(방 보유 프로젝트) 기준 (QI-WG-021 경로).
 pub async fn list_projects<R: WebguiRepository>(
     repo: &R,
     disc: &DiscoveryRegistry,
     selected_project_id: Option<&str>,
     projects_base: &str,
 ) -> Result<Value, ApiError> {
-    // 디스커버리(cmux tree) 우선 — connection_state 실값 보유.
+    // 디스커버리(mux tree) 우선 — connection_state 실값 보유.
     let disc_projects = disc.projects();
     // RV-55/아테나 정본: discovery-backed 프로젝트는 last_discovered_at 이 ISO-8601 string(null 불허),
     // root_path 는 <projects_base>/<pid> (Python settings.project_root). DB-only 는 null 유지.

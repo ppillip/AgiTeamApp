@@ -1,6 +1,6 @@
 //! WG-MSG-02 send_message (PM 브리지). 웹 발신은 항상 PM surface 로 전달.
 //! 레퍼런스: Python services/pm_bridge.py PMBridge.send.
-//! cmux 상호작용은 MuxPort 포트로 추상화(transport 무관) — infra(agiteamapp-mux)가 구현.
+//! mux 상호작용은 MuxPort 포트로 추상화(transport 무관) — infra(agiteamapp-mux)가 구현.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,7 +17,7 @@ pub struct AttachmentRef {
     pub attachment_id: String,
 }
 
-/// cmux 제출 텍스트 합성. PM(Claude Code)이 첨부 이미지를 실제로 읽을 수 있도록
+/// mux 제출 텍스트 합성. PM(Claude Code)이 첨부 이미지를 실제로 읽을 수 있도록
 /// 제출 텍스트에 첨부 이미지의 '절대 파일경로'를 함께 싣는다.
 /// 형식: (사용자 텍스트 있으면 그 텍스트) + `[첨부 이미지 N개]` 헤더 + 절대경로 N줄(순서 보존).
 /// 첨부 없으면 user_text 를 그대로 반환(기존 동작 불변).
@@ -47,7 +47,7 @@ pub struct PmTarget {
     pub display_name: String,
 }
 
-/// 멀티플렉서 포트 (outbound). agiteamapp-mux 가 구현. core 는 native(cmux/tmux) 포맷을 모른다.
+/// 멀티플렉서 포트 (outbound). agiteamapp-mux 가 구현. core 는 native(mux) 포맷을 모른다.
 pub trait MuxPort: Send + Sync {
     /// 역할 surface 동적 해소(PM 포함 임의 역할). 미연결이면 None.
     async fn resolve_role(&self, project_id: &str, role: &str) -> Result<Option<PmTarget>, ApiError>;
@@ -87,7 +87,7 @@ fn provenance_pm_bridge() -> Value {
     })
 }
 
-/// 송신: PM 해소→핑→방 upsert→pending 선저장→cmux submit→status/event→WS publish.
+/// 송신: PM 해소→핑→방 upsert→pending 선저장→mux submit→status/event→WS publish.
 #[allow(clippy::too_many_arguments)]
 pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
     repo: &R,
@@ -115,7 +115,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
     }
 
     // 첨부 절대경로 해소(부분송신 금지: 하나라도 만료/없음이면 전체 실패, §5.4.6).
-    // 공개 attachments_json(말풍선용)과 cmux 제출용 절대경로를 분리 수집한다.
+    // 공개 attachments_json(말풍선용)과 mux 제출용 절대경로를 분리 수집한다.
     let mut resolved_abs_paths: Vec<String> = Vec::new();
     let mut public_attachments: Vec<Value> = Vec::new();
     if !attachment_ids.is_empty() {
@@ -142,7 +142,7 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
     let target = mux
         .resolve_role(project_id, &role)
         .await?
-        .ok_or_else(|| ApiError::new("surface_not_found", 409, "No active cmux surface for target role."))?;
+        .ok_or_else(|| ApiError::new("surface_not_found", 409, "No active surface for target role."))?;
 
     // 2) liveness 핑
     if !mux.ping(&target).await {
@@ -191,27 +191,27 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
         })
         .await?;
 
-    // 5) cmux submit (DB 트랜잭션 밖). 첨부 있으면 본문 뒤에 절대경로 블록을 합성해
+    // 5) mux submit (DB 트랜잭션 밖). 첨부 있으면 본문 뒤에 절대경로 블록을 합성해
     //    PM(Claude Code)이 그 경로를 Read 로 열어 이미지를 확인할 수 있게 한다.
     let submit_text = compose_submit_text(&clean, &resolved_abs_paths);
     if !resolved_abs_paths.is_empty() {
-        // 운영 진단: cmux 제출 텍스트에 첨부 절대경로가 실제 포함됐는지 확인.
+        // 운영 진단: mux 제출 텍스트에 첨부 절대경로가 실제 포함됐는지 확인.
         eprintln!(
-            "[send] attachments={} cmux submit_text={submit_text:?}",
+            "[send] attachments={} submit_text={submit_text:?}",
             resolved_abs_paths.len()
         );
     }
     let submitted = mux.submit(&target, &submit_text).await.unwrap_or(false);
     let status = if submitted { "sent" } else { "failed" };
 
-    // 6) status 반영 + cmux_send_result event + last_message touch
+    // 6) status 반영 + mux_send_result event + last_message touch
     repo.set_message_status(&msg.message_id, status).await?;
     repo.touch_room_last_message(&room.room_id, &msg.message_id, &msg.occurred_at, false)
         .await?;
     repo.insert_runtime_event(NewEvent {
         room_id: room.room_id.clone(),
-        event_type: "cmux_send_result".to_string(),
-        source: "cmux_adapter".to_string(),
+        event_type: "mux_send_result".to_string(),
+        source: "mux_adapter".to_string(),
         hook_provider: None,
         hook_event_name: None,
         severity: if submitted { "info" } else { "error" }.to_string(),
@@ -260,14 +260,14 @@ pub async fn send_message<R: WebguiRepository, M: MuxPort, P: EventPublisher>(
         "workspace_id": target.workspace_id,
         "agent_session_id": Value::Null,
         "status": status,
-        // Python ack.submitted_at = cmux submit 완료 시각(result.ended_at). normalize 대상.
+        // Python ack.submitted_at = mux submit 완료 시각(result.ended_at). normalize 대상.
         "submitted_at": msg.occurred_at,
         "provenance": provenance_pm_bridge(),
         "client_message_id": req.client_message_id,
     });
 
     if !submitted {
-        return Err(ApiError::new("send_failed", 502, "cmux send failed."));
+        return Err(ApiError::new("send_failed", 502, "team send failed."));
     }
 
     Ok(json!({ "ack": ack, "message": message }))

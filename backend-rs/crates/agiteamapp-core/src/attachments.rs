@@ -246,7 +246,7 @@ impl AttachmentService {
     }
 
     /// attachment_id → (abs_path, 공개메타 dict). project 소유·TTL·경로 검증.
-    /// 송신(send) 경로에서 절대경로(cmux 제출용)와 공개 attachments_json(말풍선용)을 함께 얻는다.
+    /// 송신(send) 경로에서 절대경로(mux 제출용)와 공개 attachments_json(말풍선용)을 함께 얻는다.
     pub fn resolve_with_meta(
         &self,
         project_id: &str,

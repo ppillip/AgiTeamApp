@@ -2,15 +2,18 @@
 //! 레퍼런스: services/{transcript_parser,transcript_collector}.py.
 //! 파서는 순수(core·테스트 가능). 파일 IO 는 TranscriptPort 구현(http)이 수행.
 
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::events::EventPublisher;
 use crate::masking::{mask_text, sanitize_tool_leak};
-use crate::repo::{compute_raw_hash, NewMessage, RepoError, TranscriptHint, WebguiRepository};
+use crate::repo::{
+    compute_raw_hash, ApiError, NewMessage, RepoError, TranscriptHint, WebguiRepository,
+};
 
 pub const TRANSCRIPT_SOURCE: &str = "transcript";
 
-/// canonical 매칭 텍스트: 공백 정규화(trim + 연속공백 1개). cmux 래핑/공백차 흡수.
+/// canonical 매칭 텍스트: 공백 정규화(trim + 연속공백 1개). 터미널 래핑/공백차 흡수.
 /// (Python transcript_collector.canonical_match_text 정합)
 fn canonical_text(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -359,4 +362,105 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         stored += 1;
     }
     Ok(stored)
+}
+
+// ── Phase 1: teamwatch(edge) 수신 계약 ───────────────────────────────────────
+// edge 가 로컬 transcript 파일을 파싱(A: 포맷/위치/provider)해 정제 records 를 POST 하면,
+// backend 는 room(upsert project+role)·hash·direction·correlation·dedup·mask·store·WS 를
+// 전부 자기가 산출한다(B). 파일은 읽지 않는다 — provider 는 hash/저장 메타에만 쓴다.
+// 핵심: 기존 store_records 를 그대로 재사용 → transcript 폴링 경로와 dedup/correlation/WS 거동 동일.
+
+/// 수신 계약 스키마 버전(아테나 정본과 동기화). 미동의 버전은 거절하지 않고 기록만(전방호환).
+pub const TRANSCRIPT_RECORDS_SCHEMA_VERSION: u32 = 1;
+
+/// envelope.records[] 항목 — edge 가 파싱한 1건. (= TranscriptRecord 의 와이어 표현, provider 는 envelope 공통)
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranscriptRecordIn {
+    #[serde(default)]
+    pub record_id: Option<String>,
+    /// user_message | assistant_message
+    pub kind: String,
+    pub text: String,
+    #[serde(default)]
+    pub occurred_at: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+/// teamwatch(edge) → backend 수신 envelope. project+role 기반(edge 는 room_id 를 모름).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranscriptRecordsEnvelope {
+    pub project_id: String,
+    pub role: String,
+    /// "claude_code" | "codex"
+    pub provider: String,
+    #[serde(default)]
+    pub records: Vec<TranscriptRecordIn>,
+    /// edge 의 파일 offset 체크포인트(정보용 — backend 는 저장만, offset 상태는 edge 소유).
+    #[serde(default)]
+    pub transcript_end_offset: Option<u64>,
+    #[serde(default)]
+    pub schema_version: Option<u32>,
+}
+
+/// edge 수신 핸들러 코어. 검증 → room upsert(project+role) → records 매핑 → store_records 위임.
+pub async fn collect_transcript_records<R: WebguiRepository, P: EventPublisher>(
+    repo: &R,
+    publisher: &P,
+    env: TranscriptRecordsEnvelope,
+) -> Result<Value, ApiError> {
+    // 계약 검증.
+    if env.project_id.trim().is_empty() || env.role.trim().is_empty() {
+        return Err(ApiError::new("invalid_envelope", 422, "project_id and role are required."));
+    }
+    if !matches!(env.provider.as_str(), "claude_code" | "codex") {
+        return Err(ApiError::new(
+            "invalid_provider",
+            422,
+            "provider must be claude_code or codex.",
+        ));
+    }
+    for r in &env.records {
+        if r.kind != "user_message" && r.kind != "assistant_message" {
+            return Err(ApiError::new(
+                "invalid_kind",
+                422,
+                "kind must be user_message or assistant_message.",
+            ));
+        }
+    }
+
+    // room 산출: (project, role) upsert. display_name 미제공 → role(collect_hook 관례 정합).
+    let room_type = if env.role == "PM" { "pm" } else { "role" };
+    let room = repo
+        .upsert_room(&env.project_id, &env.role, &env.role, room_type, None, None)
+        .await?;
+
+    // envelope record → 내부 TranscriptRecord (provider 는 envelope 공통값).
+    let records: Vec<TranscriptRecord> = env
+        .records
+        .iter()
+        .map(|r| TranscriptRecord {
+            provider: env.provider.clone(),
+            record_id: r.record_id.clone(),
+            kind: r.kind.clone(),
+            text: r.text.clone(),
+            occurred_at: r.occurred_at.clone(),
+            session_id: r.session_id.clone(),
+        })
+        .collect();
+
+    // 저장: 기존 store_records 재사용 — hash/direction/dedup①②/bridge-dup/correlation/mask/insert/touch/WS.
+    let stored =
+        store_records(repo, publisher, &env.project_id, &room.room_id, &env.role, &records).await?;
+
+    Ok(json!({
+        "accepted": true,
+        "received": env.records.len(),
+        "stored": stored,
+        "room_id": room.room_id,
+        "project_id": env.project_id,
+        "role": env.role,
+        "schema_version": env.schema_version.unwrap_or(TRANSCRIPT_RECORDS_SCHEMA_VERSION),
+    }))
 }

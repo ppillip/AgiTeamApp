@@ -1,5 +1,5 @@
-//! cmux 디스커버리 레지스트리: `cmux tree` 파싱 → (project, role) 연결상태.
-//! 레퍼런스: services/cmux_discovery.py. 파서 순수(테스트 가능). 시각은 epoch(http 주입).
+//! mux 디스커버리 레지스트리: mux tree(team facade 출력) 파싱 → (project, role) 연결상태.
+//! 레퍼런스: 레거시 discovery 서비스. 파서 순수(테스트 가능). 시각은 epoch(http 주입).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -38,8 +38,8 @@ pub fn parse_title(title: &str) -> Option<(String, String)> {
     Some((if display.is_empty() { role.to_string() } else { display.to_string() }, role.to_string()))
 }
 
-/// 멀티플렉서 중립 추상 구조 (DS-70 Phase 0). core 는 cmux/tmux 의 **출력 포맷을 모른다**.
-/// 어댑터(agiteamapp-mux)가 native tree(예: `cmux tree`)를 파싱해 이 구조로 변환하고,
+/// 멀티플렉서 중립 추상 구조 (DS-70 Phase 0). core 는 mux 의 **출력 포맷을 모른다**.
+/// 어댑터(agiteamapp-mux)가 native tree(team facade 출력)를 파싱해 이 구조로 변환하고,
 /// core 는 이 구조만 받아 도메인 규칙(역할 인식·terminal 필터·연결상태)을 적용한다.
 #[derive(Debug, Clone)]
 pub struct MuxSurface {

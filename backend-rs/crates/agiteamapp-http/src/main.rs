@@ -1,21 +1,21 @@
 //! agiteamapp-http — axum adapter. 라우팅·핸들러는 core usecase 를 호출만 한다.
 //! DB 구현은 agiteamapp-db(PgRepository), WS fanout 은 broadcast 기반 WsHub 로 주입.
 
-mod supervisor;
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use agiteamapp_core::{
-    collect_event, collect_hook, collect_message, collect_runtime_activity, get_message,
+    collect_event, collect_hook, collect_message, collect_runtime_activity,
+    collect_transcript_records, get_message,
     list_events_uc, list_projects, list_room_messages, list_rooms, mark_read,
     message_to_dict, message_update_type, message_updates,
     runtime_status, send_message, ActivityRegistry, ApiError, ArtifactChangeBuffer,
     CollectEventRequest, CollectMessageRequest, DiscoveryRegistry, EventPublisher,
     HookCollectRequest, MuxPort, RuntimeActivityCollectRequest,
     parse_records, store_records, ArtifactService, SendMessageRequest, TranscriptHint,
-    TranscriptPort, WebguiRepository,
+    TranscriptPort, TranscriptRecordsEnvelope, WebguiRepository,
 };
 use agiteamapp_db::PgRepository;
 use agiteamapp_mux::{build_mux_adapter, MuxAdapter, MuxConfig};
@@ -346,6 +346,19 @@ async fn message_collect(
     Json(req): Json<CollectMessageRequest>,
 ) -> (StatusCode, Json<Value>) {
     match collect_message(s.repo.as_ref(), s.hub.as_ref(), &room_id, req).await {
+        Ok(data) => ok_201(data),
+        Err(e) => err_response(e),
+    }
+}
+
+/// Phase 1: edge(teamwatch) 수신면. 출처중립 — backend 는 dumb receiver 로 project+role 기반
+/// envelope(파일 미읽음)만 받아 room/hash/direction/correlation/dedup/store/WS 를 전부 산출한다.
+/// 기존 room-scoped /rooms/:room_id/messages/collect 와 독립(추가 경로).
+async fn messages_collect(
+    State(s): State<AppState>,
+    Json(env): Json<TranscriptRecordsEnvelope>,
+) -> (StatusCode, Json<Value>) {
+    match collect_transcript_records(s.repo.as_ref(), s.hub.as_ref(), env).await {
         Ok(data) => ok_201(data),
         Err(e) => err_response(e),
     }
@@ -1189,6 +1202,7 @@ fn app(state: AppState) -> Router {
         .route("/", get(root_meta))
         .route("/api/webgui/internal/hook/collect", post(hook_collect))
         .route("/api/webgui/internal/runtime-activity/collect", post(runtime_activity_collect))
+        .route("/api/webgui/internal/messages/collect", post(messages_collect))
         .route("/api/webgui/internal/rooms/:room_id/messages/collect", post(message_collect))
         .route("/api/webgui/internal/rooms/:room_id/events/collect", post(event_collect))
         .route("/api/webgui/messages", post(message_send))
@@ -1328,8 +1342,8 @@ async fn main() {
     // discovery: 백그라운드로 mux.tree() 폴링 → connection_state/projects 갱신.
     let discovery = Arc::new(DiscoveryRegistry::new());
 
-    // mux 선택+구성은 팩토리(agiteamapp-mux)가 전담. main 은 어댑터 선택 규칙·native 명령을 모른다.
-    // 선택 규칙 현행 보존: AGITEAMAPP_MUX=cmux → Cmux, 그 외(기본) → Dummy.
+    // mux 선택+구성은 팩토리(agiteamapp-mux)가 전담. main 은 어댑터 선택 규칙·transport 명령을 모른다.
+    // 선택 규칙: AGITEAMAPP_MUX == "dummy" → Dummy, 그 외(미설정·레거시 포함) → Team(team facade 경유).
     let mux_config = MuxConfig::from_env();
     let mux = Arc::new(build_mux_adapter(&mux_config, Some(discovery.clone())));
     {
@@ -1339,7 +1353,7 @@ async fn main() {
         let poll_ms = mux_config.discovery_poll_ms;
         tokio::spawn(async move {
             loop {
-                // 포트 경유 — native(cmux) 직접 호출 금지. tree() 가 Err 면 갱신 건너뜀(직전 상태 보존).
+                // 포트 경유 — transport(mux) 직접 호출 금지. tree() 가 Err 면 갱신 건너뜀(직전 상태 보존).
                 if let Ok(workspaces) = mux_for_loop.tree().await {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -1370,10 +1384,6 @@ async fn main() {
             selected_project.as_deref(),
         );
     }
-
-    // supervisor 설정 구성용으로 state move 전에 클론 보존(아래 AppState 로 원본 이동됨).
-    let projects_base_for_poller = projects_base.clone();
-    let project_id_for_poller = selected_project.clone().unwrap_or_else(|| "Panthea".to_string());
 
     let state = AppState {
         repo: Arc::new(repo),
@@ -1464,36 +1474,17 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind failed");
     println!("agiteamapp-http listening on http://{addr} (db={database_url})");
 
-    // ACT-POL-03: PollerFaster-rs child supervisor (방안 2). 기동 순서상 listen 이후 spawn.
-    // AGITEAMAPP_ACTIVITY_POLLER_MODE=supervised 일 때만 활성(끄면 현행 수동 실행으로 롤백).
-    // shutdown_tx 로 서버 종료를 supervisor 에 전파 → child SIGTERM 후 wait(orphan 금지).
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let collector_token_for_poller =
-        std::env::var("AGITEAMAPP_COLLECTOR_TOKEN").ok().filter(|s| !s.is_empty());
-    let supervisor_handle = match supervisor::SupervisorConfig::from_env(
-        &projects_base_for_poller,
-        &project_id_for_poller,
-        port,
-        collector_token_for_poller,
-    ) {
-        Some(cfg) => Some(tokio::spawn(supervisor::run(cfg, shutdown_rx))),
-        None => None,
-    };
-
+    // teamwatch(runtime-activity 폴러)는 backend 가 spawn/supervise 하지 않는다.
+    // backend 는 수신 엔드포인트(/api/webgui/internal/runtime-activity/collect)로 POST 만 받고,
+    // teamwatch 는 외부(teamboot/수동)에서 1프로젝트·1팀 단위로 독립 실행된다(폴러 부재 허용).
     axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal(shutdown_tx.clone()))
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("serve failed");
-
-    // serve 종료(graceful) 후 supervisor 에도 종료 전파하고 child 정리를 기다린다.
-    let _ = shutdown_tx.send(true);
-    if let Some(handle) = supervisor_handle {
-        let _ = handle.await;
-    }
 }
 
-/// Ctrl-C 또는 SIGTERM 수신 시 graceful shutdown 시작 + supervisor 에 종료 전파.
-async fn shutdown_signal(shutdown_tx: tokio::sync::watch::Sender<bool>) {
+/// Ctrl-C 또는 SIGTERM 수신 시 graceful shutdown 시작.
+async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -1513,5 +1504,4 @@ async fn shutdown_signal(shutdown_tx: tokio::sync::watch::Sender<bool>) {
         _ = term => {}
     }
     eprintln!("[shutdown] 종료 시그널 수신 → graceful shutdown");
-    let _ = shutdown_tx.send(true);
 }

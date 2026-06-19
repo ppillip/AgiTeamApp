@@ -167,7 +167,7 @@ export default {
         <div class="flex items-center gap-[11px]">
           <div class="flex h-[34px] w-[34px] items-center justify-center rounded-[10px] bg-amber text-[17px] font-extrabold text-white">A</div>
           <div>
-            <div class="text-[15px] font-bold tracking-[-0.01em]">AgiTeamApp</div>
+            <div class="text-[15px] font-bold tracking-[-0.01em]">AgiTeamCenter</div>
             <div class="mt-px text-[11.5px] text-ink-500">팀 모니터 · 대화와 산출물</div>
           </div>
         </div>

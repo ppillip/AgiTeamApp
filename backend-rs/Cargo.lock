@@ -33,7 +33,6 @@ dependencies = [
  "agiteamapp-mux",
  "axum",
  "chrono",
- "libc",
  "notify",
  "serde",
  "serde_json",

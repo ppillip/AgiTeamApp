@@ -38,7 +38,8 @@ pub use query::{
 };
 pub use send::{send_message, MuxPort, PmTarget, SendMessageRequest, PM_ROLE_ID};
 pub use transcript::{
-    parse_records, store_records, NoopTranscript, TranscriptPort, TranscriptRecord,
+    collect_transcript_records, parse_records, store_records, NoopTranscript, TranscriptPort,
+    TranscriptRecord, TranscriptRecordIn, TranscriptRecordsEnvelope,
 };
 pub use repo::{
     compute_raw_hash, is_activity_role, normalize_event_type, normalize_provider, ApiError,
@@ -149,6 +150,7 @@ mod tests {
                 message_type: m.message_type,
                 normalized_text: m.normalized_text,
                 status: m.status,
+                attachments_json: m.attachments.unwrap_or_else(|| json!([])),
                 occurred_at: m.occurred_at_iso,
                 recorded_at: "rec".into(),
                 updated_at: "upd".into(),
@@ -283,10 +285,12 @@ mod tests {
             session_id: Some("s".into()),
             transcript_path: None,
             cwd: None,
+            hook_stdin: None,
+            payload: None,
         };
         let tr = FlagTranscript::default();
         let r = collect_hook(&repo, &NoopPublisher, &tr, req).await.unwrap();
-        assert_eq!(r.event_type, "hook_stop");
+        assert_eq!(r["event"]["event_type"], json!("hook_stop"));
         assert!(tr.called.load(Ordering::SeqCst));
     }
 
@@ -460,8 +464,8 @@ mod tests {
         assert_eq!(epoch_to_iso(0), "1970-01-01T00:00:00Z");
     }
 
-    // NOTE: cmux tree 텍스트 파서(parse_tree)는 Phase 0 에서 agiteamapp-mux 어댑터로 이관됨.
-    // 해당 파서 검증은 crates/agiteamapp-mux/tests/parse_cmux_tree.rs 로 이동.
+    // NOTE: mux tree 텍스트 파서(parse_tree)는 Phase 0 에서 agiteamapp-mux 어댑터로 이관됨.
+    // 해당 파서 검증은 crates/agiteamapp-mux/tests/parse_team_tree.rs 로 이동.
 
     // --- transcript parser ---
     #[test]
@@ -490,24 +494,32 @@ mod tests {
             text: "PM에게 보내는 메시지".into(),
             project_id: Some("Panthea".into()),
             client_message_id: Some("cm-1".into()),
+            target_role: None,
+            attachments: vec![],
         };
-        let out = send_message(&repo, &mux, &NoopPublisher, "Panthea", "corr-1", req)
+        let out = send_message(&repo, &mux, &NoopPublisher, "Panthea", "corr-1", req, None, 0)
             .await
             .unwrap();
         assert_eq!(out["ack"]["status"], json!("sent"));
         assert_eq!(out["ack"]["send_submitted"], json!(true));
         assert_eq!(out["message"]["status"], json!("sent"));
         assert_eq!(*repo.last_status.lock().unwrap(), Some("sent".to_string()));
-        // cmux_send_result event 기록 확인
-        assert!(repo.events.lock().unwrap().contains(&"cmux_send_result".to_string()));
+        // mux_send_result event 기록 확인
+        assert!(repo.events.lock().unwrap().contains(&"mux_send_result".to_string()));
     }
 
     #[tokio::test]
     async fn send_message_empty_422() {
         let repo = FakeRepo::default();
         let mux = FakeMux { submitted: true };
-        let req = SendMessageRequest { text: "   ".into(), project_id: None, client_message_id: None };
-        let err = send_message(&repo, &mux, &NoopPublisher, "Panthea", "corr-2", req)
+        let req = SendMessageRequest {
+            text: "   ".into(),
+            project_id: None,
+            client_message_id: None,
+            target_role: None,
+            attachments: vec![],
+        };
+        let err = send_message(&repo, &mux, &NoopPublisher, "Panthea", "corr-2", req, None, 0)
             .await
             .unwrap_err();
         assert_eq!(err.code, "empty_message");
@@ -518,8 +530,14 @@ mod tests {
     async fn send_message_submit_fail_502() {
         let repo = FakeRepo::default();
         let mux = FakeMux { submitted: false };
-        let req = SendMessageRequest { text: "x".into(), project_id: None, client_message_id: None };
-        let err = send_message(&repo, &mux, &NoopPublisher, "Panthea", "corr-3", req)
+        let req = SendMessageRequest {
+            text: "x".into(),
+            project_id: None,
+            client_message_id: None,
+            target_role: None,
+            attachments: vec![],
+        };
+        let err = send_message(&repo, &mux, &NoopPublisher, "Panthea", "corr-3", req, None, 0)
             .await
             .unwrap_err();
         assert_eq!(err.code, "send_failed");
