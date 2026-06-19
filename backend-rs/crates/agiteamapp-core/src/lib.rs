@@ -13,7 +13,6 @@ pub mod attachments;
 pub mod discovery;
 pub mod event;
 pub mod events;
-pub mod hook;
 pub mod masking;
 pub mod message;
 pub mod query;
@@ -29,7 +28,6 @@ pub use attachments::{detect_image, epoch_to_iso, AttachmentService};
 pub use discovery::{DiscoveryRegistry, MuxSurface, MuxWorkspace};
 pub use event::{collect_event, event_to_dict, CollectEventRequest};
 pub use events::{EventPublisher, NoopPublisher};
-pub use hook::{collect_hook, HookCollectRequest};
 pub use masking::{mask_payload, mask_text, sanitize_tool_leak};
 pub use message::{collect_message, message_to_dict, CollectMessageRequest};
 pub use query::{
@@ -267,31 +265,6 @@ mod tests {
         async fn tree(&self) -> Result<Vec<crate::discovery::MuxWorkspace>, ApiError> {
             Ok(vec![])
         }
-    }
-
-    // --- hook ---
-    #[tokio::test]
-    async fn hook_stop_triggers_transcript() {
-        let repo = FakeRepo::default();
-        let req = HookCollectRequest {
-            project_id: "Panthea".into(),
-            role: "DeveloperBE".into(),
-            display_name: None,
-            team_session_id: None,
-            agent_id: None,
-            hook_provider: Some("claude_code".into()),
-            cli: None,
-            hook_event_name: "Stop".into(),
-            session_id: Some("s".into()),
-            transcript_path: None,
-            cwd: None,
-            hook_stdin: None,
-            payload: None,
-        };
-        let tr = FlagTranscript::default();
-        let r = collect_hook(&repo, &NoopPublisher, &tr, req).await.unwrap();
-        assert_eq!(r["event"]["event_type"], json!("hook_stop"));
-        assert!(tr.called.load(Ordering::SeqCst));
     }
 
     // --- runtime-activity ---

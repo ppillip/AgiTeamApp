@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Backend = single central kernel receiver. Project-local teamwatch edges push transcripts to /api/webgui/internal/messages/collect.
+# The backend does not read transcript files or run transcript polling.
+
 APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="${APP_ROOT}/backend-rs"
 LOG_FILE="/tmp/agiteamapp-rs.log"
@@ -51,7 +54,6 @@ export AGITEAMAPP_DATABASE_URL="${AGITEAMAPP_DATABASE_URL:-postgres://agiteamapp
 export AGITEAMAPP_MUX="${AGITEAMAPP_MUX:-team}"
 export AGITEAMAPP_PROJECT_ID="${AGITEAMAPP_PROJECT_ID:-Panthea}"
 export AGITEAMAPP_PROJECTS_BASE="${AGITEAMAPP_PROJECTS_BASE:-/Users/ppillip/Projects}"
-export AGITEAMAPP_TRANSCRIPT_POLL_MS="${AGITEAMAPP_TRANSCRIPT_POLL_MS:-300}"
 export AGITEAMAPP_RS_PORT="${AGITEAMAPP_RS_PORT:-8000}"
 
 if [ "$BG" -eq 1 ]; then

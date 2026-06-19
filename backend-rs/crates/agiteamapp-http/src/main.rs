@@ -2,20 +2,20 @@
 //! DB 구현은 agiteamapp-db(PgRepository), WS fanout 은 broadcast 기반 WsHub 로 주입.
 
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use agiteamapp_core::{
-    collect_event, collect_hook, collect_message, collect_runtime_activity,
+    collect_event, collect_message, collect_runtime_activity,
     collect_transcript_records, get_message,
     list_events_uc, list_projects, list_room_messages, list_rooms, mark_read,
     message_to_dict, message_update_type, message_updates,
     runtime_status, send_message, ActivityRegistry, ApiError, ArtifactChangeBuffer,
     CollectEventRequest, CollectMessageRequest, DiscoveryRegistry, EventPublisher,
-    HookCollectRequest, MuxPort, RuntimeActivityCollectRequest,
-    parse_records, store_records, ArtifactService, SendMessageRequest, TranscriptHint,
-    TranscriptPort, TranscriptRecordsEnvelope, WebguiRepository,
+    MuxPort, NoopTranscript, RuntimeActivityCollectRequest,
+    ArtifactService, SendMessageRequest,
+    TranscriptRecordsEnvelope, WebguiRepository,
 };
 use agiteamapp_db::PgRepository;
 use agiteamapp_mux::{build_mux_adapter, MuxAdapter, MuxConfig};
@@ -61,114 +61,6 @@ impl EventPublisher for WsHub {
     }
 }
 
-/// transcript 즉시수집: hint.transcript_path 파일을 **직전 offset 이후 신규 바이트만** tail 해
-/// 파싱→store. (Python transcript_collector._read_new 의 offset+seek 방식 이식, P1)
-/// 핵심: 매 훅마다 파일 전체를 read_to_string 하고 전체 record 를 재dedup 하던 O(N²) 거동을 제거,
-/// 신규분만 처리(O(신규))한다. offset 상태는 AppState.tx_offsets 에 파일경로별로 공유 보존한다.
-struct TranscriptCollector {
-    repo: Arc<PgRepository>,
-    hub: Arc<WsHub>,
-    /// transcript_path → 직전까지 읽은 바이트 offset (요청 간 공유 보존).
-    offsets: Arc<Mutex<HashMap<String, u64>>>,
-    /// (project_id, role_id) → 그 surface 의 최신 세션 hint. 폴링 fallback 루프가 이 목록을
-    /// 주기적으로 재수집해, hook 레이스/idle 로 정체된 발화를 다음 훅을 기다리지 않고 flush 한다.
-    /// role 키로 두어 7 surface(6역할+PM) 각각 정확히 1개의 '현재 세션'만 폴링한다(세션 resume
-    /// 시 최신 transcript_path 로 자동 갱신, stale 누적 없음). (Python session_registry 등가)
-    sessions: Arc<Mutex<HashMap<(String, String), TranscriptHint>>>,
-    /// transcript_path 별 collect 직렬화 락. poll 루프와 hook 의 동시 collect 가 같은 offset 을
-    /// 읽어 같은 record 를 중복 insert 하는 경합을 차단한다(특히 record_id 없는 codex: dedup 이
-    /// SELECT(find_message_by_hash) 기반이라 미커밋 동시 insert 를 못 보고 둘 다 insert 됨).
-    path_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-}
-impl TranscriptPort for TranscriptCollector {
-    async fn collect(&self, hint: &TranscriptHint) {
-        use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-        let Some(path) = &hint.transcript_path else {
-            return;
-        };
-        // 같은 파일에 대한 collect 를 직렬화(동시 collect → 같은 offset 재읽기 → 중복 insert 방지).
-        let path_lock = {
-            let mut m = self.path_locks.lock().unwrap();
-            m.entry(path.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let _serialize = path_lock.lock().await;
-        // 폴링 fallback 이 이 surface 를 알도록 (project, role) 키로 등록(최신 hint 로 갱신).
-        // path 는 아래 offset 키로 계속 쓰인다. idle 시에도 루프가 [offset..EOF] 를 확인해
-        // hook 레이스로 밀린 신규 record 를 즉시 flush 한다.
-        {
-            let mut s = self.sessions.lock().unwrap();
-            s.insert((hint.project_id.clone(), hint.role.clone()), hint.clone());
-        }
-        let mut file = match tokio::fs::File::open(path).await {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("[transcript] open 실패(무시) {path}: {e}");
-                return;
-            }
-        };
-        let size = match file.metadata().await {
-            Ok(m) => m.len(),
-            Err(e) => {
-                eprintln!("[transcript] stat 실패(무시) {path}: {e}");
-                return;
-            }
-        };
-        // 직전 offset 조회. rotation/truncate(파일이 줄어듦)면 0 으로 리셋(Python 정합).
-        // std Mutex 는 .await 이전에 즉시 해제(가드를 await 너머로 들고 가지 않음).
-        let mut offset = {
-            let map = self.offsets.lock().unwrap();
-            map.get(path).copied().unwrap_or(0)
-        };
-        if size < offset {
-            offset = 0;
-        }
-        if size <= offset {
-            // 신규 바이트 없음 → 파일 파싱·DB dedup 모두 스킵(O(0)). 과거 전체 재읽기 제거.
-            return;
-        }
-        if offset > 0 {
-            if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)).await {
-                eprintln!("[transcript] seek 실패(무시) {path}: {e}");
-                return;
-            }
-        }
-        let mut buf = Vec::new();
-        if let Err(e) = file.read_to_end(&mut buf).await {
-            eprintln!("[transcript] read 실패(무시) {path}: {e}");
-            return;
-        }
-        // 부분 라인(쓰기 진행 중) 유실 방지: 마지막 개행까지만 처리, offset 도 거기까지만 전진.
-        let end = match buf.iter().rposition(|&b| b == b'\n') {
-            Some(i) => i + 1,
-            None => return, // 아직 완결된 라인 없음 → 다음 훅 대기
-        };
-        let new_offset = offset + end as u64;
-        let text = String::from_utf8_lossy(&buf[..end]);
-        let provider = hint.provider.as_deref().unwrap_or("claude_code");
-        let records = parse_records(provider, &text);
-        match store_records(
-            self.repo.as_ref(),
-            self.hub.as_ref(),
-            &hint.project_id,
-            &hint.room_id,
-            &hint.role,
-            &records,
-        )
-        .await
-        {
-            Ok(n) => {
-                // offset 전진은 저장 성공 시에만(실패 시 다음 훅이 같은 구간 재시도).
-                self.offsets.lock().unwrap().insert(path.clone(), new_offset);
-                eprintln!("[transcript] room={} stored={n} offset={new_offset}", hint.room_id);
-            }
-            Err(e) => eprintln!("[transcript] store 실패(무시): {e}"),
-        }
-    }
-}
-
 #[derive(Clone)]
 struct AppState {
     repo: Arc<PgRepository>,
@@ -183,26 +75,6 @@ struct AppState {
     collector_token: Option<String>,
     // WG-ART-04: watcher 비활성이면 changes 폴링은 503(Python artifact_watcher_unavailable 정합).
     artifact_watcher_enabled: bool,
-    // P1: transcript 증분 tail offset 공유 상태(파일경로별). 요청마다 컬렉터를 새로 만들어도
-    // 이 Arc 를 공유하므로 offset 이 보존된다(Python session_registry_singleton 역할).
-    tx_offsets: Arc<Mutex<HashMap<String, u64>>>,
-    // 폴링 fallback 용 세션 레지스트리((project, role) → 최신 hint). 모든 훅에서 등록되고
-    // 백그라운드 transcript_poll_loop 가 주기적으로 재수집한다(Python transcript_loop 등가).
-    tx_sessions: Arc<Mutex<HashMap<(String, String), TranscriptHint>>>,
-    // transcript_path 별 collect 직렬화 락(중복 insert 경합 차단).
-    tx_path_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-}
-
-impl AppState {
-    fn transcript(&self) -> TranscriptCollector {
-        TranscriptCollector {
-            repo: self.repo.clone(),
-            hub: self.hub.clone(),
-            offsets: self.tx_offsets.clone(),
-            sessions: self.tx_sessions.clone(),
-            path_locks: self.tx_path_locks.clone(),
-        }
-    }
 }
 
 impl AppState {
@@ -319,17 +191,6 @@ fn ok_200(data: Value) -> (StatusCode, Json<Value>) {
 
 // --- 수집 입구 (POST) --------------------------------------------------------
 
-async fn hook_collect(
-    State(s): State<AppState>,
-    Json(req): Json<HookCollectRequest>,
-) -> (StatusCode, Json<Value>) {
-    let tr = s.transcript();
-    match collect_hook(s.repo.as_ref(), s.hub.as_ref(), &tr, req).await {
-        Ok(r) => ok_201(r),
-        Err(e) => err_response(e),
-    }
-}
-
 async fn runtime_activity_collect(
     State(s): State<AppState>,
     Json(req): Json<RuntimeActivityCollectRequest>,
@@ -369,8 +230,10 @@ async fn event_collect(
     Path(room_id): Path<String>,
     Json(req): Json<CollectEventRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let tr = s.transcript();
-    match collect_event(s.repo.as_ref(), s.hub.as_ref(), &tr, &room_id, req).await {
+    // DS-134: backend 는 dumb receiver. event 는 저장/WS publish 만 하고 transcript 파일은
+    // 일절 읽지 않는다(hook_stop 의 파일수집 트리거를 NoopTranscript 로 무력화).
+    // LIVE TRANSCRIPT 공급은 edge(teamwatch) → /messages/collect 단일 통로만 담당한다.
+    match collect_event(s.repo.as_ref(), s.hub.as_ref(), &NoopTranscript, &room_id, req).await {
         Ok(data) => ok_201(data),
         Err(e) => err_response(e),
     }
@@ -1200,7 +1063,6 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/", get(root_meta))
-        .route("/api/webgui/internal/hook/collect", post(hook_collect))
         .route("/api/webgui/internal/runtime-activity/collect", post(runtime_activity_collect))
         .route("/api/webgui/internal/messages/collect", post(messages_collect))
         .route("/api/webgui/internal/rooms/:room_id/messages/collect", post(message_collect))
@@ -1397,73 +1259,12 @@ async fn main() {
         api_token: std::env::var("AGITEAMAPP_API_TOKEN").ok().filter(|s| !s.is_empty()),
         collector_token: std::env::var("AGITEAMAPP_COLLECTOR_TOKEN").ok().filter(|s| !s.is_empty()),
         artifact_watcher_enabled,
-        tx_offsets: Arc::new(Mutex::new(HashMap::new())),
-        tx_sessions: Arc::new(Mutex::new(HashMap::new())),
-        tx_path_locks: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    // transcript 폴링 fallback 루프 (Python background.transcript_loop 등가).
-    // hook_stop 즉시수집이 주 경로지만, PM 발화 직후 transcript flush 레이스로 Stop 시점에
-    // 아직 안 써진 메시지는 다음 훅까지 정체된다. 이 루프가 등록된 세션을 짧은 주기로
-    // 재수집해 [offset..EOF] 신규분을 즉시 흘려보낸다. offset 기반이라 idle 은 거의 무비용.
-    {
-        let repo = state.repo.clone();
-        let hub = state.hub.clone();
-        let offsets = state.tx_offsets.clone();
-        let sessions = state.tx_sessions.clone();
-        let path_locks = state.tx_path_locks.clone();
-        let discovery = state.discovery.clone();
-        tokio::spawn(async move {
-            let collector = TranscriptCollector {
-                repo,
-                hub,
-                offsets,
-                sessions: sessions.clone(),
-                path_locks,
-            };
-            let poll_ms = std::env::var("AGITEAMAPP_TRANSCRIPT_POLL_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .filter(|n| *n > 0)
-                .unwrap_or(1000);
-            let mut tick: u64 = 0;
-            loop {
-                // 등록된 모든 (project, role) 세션을 재수집한다. role 키라 7 surface 각각
-                // 정확히 1개 현재 세션만 폴링하고, offset 기반이라 idle 은 즉시 return(무비용).
-                let hints: Vec<TranscriptHint> = {
-                    let m = sessions.lock().unwrap();
-                    m.values().cloned().collect()
-                };
-                for h in &hints {
-                    collector.collect(h).await;
-                }
-                // 커버리지 교차검증(약 10초마다): discovery 가 connected 로 보는 surface 중
-                // 아직 훅으로 transcript 가 등록되지 않은 것을 경고 로그로 가시화한다.
-                // (discovery 에는 transcript_path 가 없어 그 자체로는 폴링할 수 없다 — 경로는
-                //  훅에서만 온다. 모든 활성 에이전트는 부팅 시 SessionStart 훅으로 등록된다.)
-                tick = tick.wrapping_add(1);
-                if tick % 10 == 0 {
-                    let registered: HashSet<(String, String)> = {
-                        let m = sessions.lock().unwrap();
-                        m.keys().cloned().collect()
-                    };
-                    let missing: Vec<(String, String)> = discovery
-                        .connected_surfaces()
-                        .into_iter()
-                        .filter(|k| !registered.contains(k))
-                        .collect();
-                    if !missing.is_empty() {
-                        eprintln!(
-                            "[transcript:coverage] 미등록 surface(훅 대기중)={:?} 등록됨={}",
-                            missing,
-                            registered.len()
-                        );
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
-            }
-        });
-    }
+    // DS-134: backend 의 중앙 transcript 수집(폴링 fallback)은 제거됐다. LIVE TRANSCRIPT 는
+    // 전적으로 edge(teamwatch)가 파일을 tail 해 /api/webgui/internal/messages/collect 로
+    // POST 하는 단일 통로로만 공급된다. backend 는 파일/offset/세션레지스트리를 모르는
+    // dumb receiver 다(분산환경에서 타 프로젝트 파일 접근 불가 문제 해소).
 
     let port: u16 = std::env::var("AGITEAMAPP_RS_PORT")
         .ok()
