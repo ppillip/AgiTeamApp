@@ -83,12 +83,12 @@ export default {
       el.style.height = "auto"; // 전송 후 1행 높이로 복귀
       el.focus(); // 커서 복귀 → 연속 입력
     },
-    // 줄 수에 따라 높이 자동 확장(최소 1행 ~ 최대 ~5행, 넘으면 내부 스크롤)
+    // 줄 수에 따라 높이 자동 확장(최소 1행 ~ 최대 ~10행, 넘으면 내부 스크롤)
     autoGrow() {
       const el = this.$refs.composer;
       if (!el) return;
       el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+      el.style.height = Math.min(el.scrollHeight, 240) + "px";
     },
     // Enter=전송, Shift+Enter=줄바꿈. IME 조합 중 Enter 는 한글 확정이므로 오전송 금지.
     onComposerKeydown(e) {
@@ -256,7 +256,7 @@ export default {
         <!-- 입력창: 실제 PM 송신 -->
         <div class="flex flex-shrink-0 items-end gap-2.5 border-t border-line-soft bg-white p-[13px]">
           <textarea ref="composer" v-model="draftProxy" @input="autoGrow" @keydown="onComposerKeydown" rows="1"
-                 class="nice-scroll min-h-[42px] max-h-[120px] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-[#e7e7ea] bg-[#F7F7F8] px-3.5 py-[10px] text-[13.5px] font-semibold leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:bg-white"
+                 class="nice-scroll min-h-[42px] max-h-[240px] min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border border-[#e7e7ea] bg-[#F7F7F8] px-3.5 py-[10px] text-[13.5px] font-semibold leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:bg-white"
                  :placeholder="`${pmRoom.displayName}(PM)에게 메시지를 입력하세요  (Enter 전송 · Shift+Enter 줄바꿈)`"></textarea>
           <button @click="submit" :disabled="store.sending || !draftProxy.trim()"
                   class="grid h-[42px] w-[42px] flex-shrink-0 place-items-center rounded-xl bg-amber text-white shadow-[0_2px_8px_rgba(221,107,31,0.32)] hover:bg-amber-600 disabled:opacity-50">

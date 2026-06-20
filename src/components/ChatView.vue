@@ -202,12 +202,12 @@ export default {
       el.style.height = "auto"; // 전송 후 1행 높이로 복귀
       el.focus(); // 커서 복귀 → 연속 입력
     },
-    // 줄 수에 따라 높이 자동 확장(최소 1행 ~ 최대 ~6행, 넘으면 내부 스크롤)
+    // 줄 수에 따라 높이 자동 확장(최소 1행 ~ 최대 ~12행, 넘으면 내부 스크롤)
     autoGrow() {
       const el = this.$refs.composer;
       if (!el) return;
       el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 148) + "px";
+      el.style.height = Math.min(el.scrollHeight, 296) + "px";
     },
     // Enter=전송, Shift+Enter=줄바꿈. IME 조합 중 Enter 는 한글 확정이므로 오전송 금지.
     onComposerKeydown(e) {
@@ -373,7 +373,6 @@ export default {
                       title="출처(DS-60 §6.1): hook/transcript=실데이터 · webgui/bridge=발신 · manual=수동 · mock=목업 · read_screen=진단">
                   {{ badgeFor(it.m).label }}
                 </span>
-                <span v-if="it.m.unmatched" class="rounded-[5px] bg-line-soft px-1.5 py-px text-[10.5px] font-semibold text-ink-500" title="발신과 매칭되지 않은 수신 메시지(DS-60 §6.8)">미매칭</span>
               </div>
 
               <!-- 본문: 방어적 정제(ANSI/터미널 chrome strip) 후 마크다운 렌더. renderMessageBody 가 전체 escape → XSS 안전 -->
@@ -482,7 +481,7 @@ export default {
             @keydown="onComposerKeydown"
             @paste="onComposerPaste"
             rows="1"
-            class="nice-scroll min-h-[48px] max-h-[148px] flex-1 resize-none overflow-y-auto rounded-[13px] border border-line bg-[#F4F4F6] px-[18px] py-[13px] text-[14.5px] leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:border-amber-tintbd focus:bg-white"
+            class="nice-scroll min-h-[48px] max-h-[296px] flex-1 resize-none overflow-y-auto rounded-[13px] border border-line bg-[#F4F4F6] px-[18px] py-[13px] text-[14.5px] leading-[1.45] text-ink-900 outline-none placeholder:text-ink-400 focus:border-amber-tintbd focus:bg-white"
             placeholder="PM에게 메시지를 입력하세요…  (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기 가능)"
           ></textarea>
           <button

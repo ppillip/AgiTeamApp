@@ -278,14 +278,14 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         let mut correlation_id: Option<String> = None;
         // 시스템 메시지: status=received(중립 inbound), message_type=status(DB CHECK 정식값).
         //   DB ck_webgui_message_type 은 'system' 을 불허 → 시스템류 정식값 'status' 채택.
-        let mut status = if is_system {
+        let status = if is_system {
             "received".to_string()
         } else if is_assistant {
             "received".to_string()
         } else {
             "sent".to_string()
         };
-        let mut message_type = if is_system {
+        let message_type = if is_system {
             "status".to_string()
         } else {
             rec.kind.clone()
@@ -294,10 +294,9 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         if is_assistant {
             match repo.find_open_outbound_correlation(room_id).await? {
                 Some(cid) => correlation_id = Some(cid),
-                None => {
-                    status = "unmatched".into();
-                    message_type = "unmatched".into();
-                }
+                // 매칭 실패한 assistant inbound 는 저장하지 않고 스킵(유저 지시 2026-06-20).
+                // offset 은 edge 소유라 continue 로 건너뛰어도 안전(stored 미증가).
+                None => continue,
             }
         }
         let occurred = match rec.occurred_at.clone() {

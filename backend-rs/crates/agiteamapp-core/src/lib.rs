@@ -344,7 +344,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_inbound_unmatched_when_no_open_outbound() {
+    async fn message_inbound_unmatched_skipped_when_no_open_outbound() {
+        // 유저 지시(2026-06-20): 매칭 실패한 inbound 는 저장하지 않고 스킵.
         let repo = FakeRepo::with_room("DeveloperBE");
         let req = CollectMessageRequest {
             agent_session_id: None,
@@ -363,10 +364,9 @@ mod tests {
             occurred_at: "2026-06-16T00:00:00Z".into(),
         };
         let out = collect_message(&repo, &NoopPublisher, "room-1", req).await.unwrap();
-        assert_eq!(out["deduplicated"], json!(false));
-        assert_eq!(out["message"]["message_type"], json!("unmatched"));
-        assert_eq!(out["message"]["status"], json!("unmatched"));
-        assert_eq!(out["message"]["direction"], json!("inbound"));
+        // 비영속 응답: skipped=unmatched, 저장된 message 없음.
+        assert_eq!(out["skipped"], json!("unmatched"));
+        assert!(out.get("message").is_none());
     }
 
     #[tokio::test]

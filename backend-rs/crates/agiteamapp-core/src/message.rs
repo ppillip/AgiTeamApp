@@ -119,15 +119,14 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
 
     // correlation 매칭
     let mut correlation_id = req.correlation_id.clone();
-    let mut status = if is_inbound { "received".to_string() } else { "sent".to_string() };
-    let mut message_type = req.message_type.clone();
+    let status = if is_inbound { "received".to_string() } else { "sent".to_string() };
+    let message_type = req.message_type.clone();
     if is_inbound && correlation_id.is_none() {
         match repo.find_open_outbound_correlation(&room.room_id).await? {
             Some(cid) => correlation_id = Some(cid),
-            None => {
-                status = "unmatched".to_string();
-                message_type = "unmatched".to_string();
-            }
+            // 매칭 실패한 inbound 는 영속화하지 않고 스킵(유저 지시 2026-06-20).
+            // touch_room/WS publish 도 생략 — 미매칭 메시지는 DB·UI 어디에도 남기지 않는다.
+            None => return Ok(json!({ "skipped": "unmatched" })),
         }
     }
 
