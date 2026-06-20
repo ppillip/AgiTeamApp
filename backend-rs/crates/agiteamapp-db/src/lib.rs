@@ -3,8 +3,8 @@
 //! 레퍼런스: Python `db/repositories.py`. timestamp 는 ::text 캐스트로 읽어 chrono 의존 회피.
 
 use agiteamapp_core::{
-    EventRow, MessagePage, MessageRow, NewEvent, NewMessage, ProjectAgg, RepoError, RoomFull,
-    RoomRef, RoomRow, WebguiRepository,
+    EventRow, MessagePage, MessageRow, NewEvent, NewMessage, ProjectAgg, RecentOutbound, RepoError,
+    RoomFull, RoomRef, RoomRow, WebguiRepository,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 use sqlx::Row;
@@ -314,6 +314,51 @@ impl WebguiRepository for PgRepository {
             None => Ok(None),
             Some(r) => Ok(tg!(&r, "correlation_id")),
         }
+    }
+
+    async fn find_recent_outbound(
+        &self,
+        room_id: &str,
+    ) -> Result<Option<RecentOutbound>, RepoError> {
+        // B안: correlation 유무 무관 '직전 outbound(sent)' 1건. (find_open_outbound_correlation
+        // 과 달리 correlation_id IS NOT NULL 조건 없음 → team-CLI 주도 턴도 매칭 성립.)
+        let row = sqlx::query(
+            "SELECT correlation_id::text AS correlation_id FROM webgui_message \
+             WHERE room_id = $1::uuid AND direction = 'outbound' AND status = 'sent' \
+             ORDER BY occurred_at DESC LIMIT 1",
+        )
+        .bind(room_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| RepoError(format!("find_recent_outbound: {e}")))?;
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(Some(RecentOutbound { correlation_id: tg!(&r, "correlation_id") })),
+        }
+    }
+
+    async fn update_room_display_name(
+        &self,
+        project_id: &str,
+        role_id: &str,
+        display_name: &str,
+    ) -> Result<(), RepoError> {
+        // 무의미 갱신 방지: 별칭이 비었거나 role 과 같으면 스킵.
+        if display_name.trim().is_empty() || display_name == role_id {
+            return Ok(());
+        }
+        // 값이 실제로 달라질 때만 UPDATE(IS DISTINCT FROM). 방이 없으면 0행 — no-op.
+        sqlx::query(
+            "UPDATE webgui_room SET display_name = $3, updated_at = now() \
+             WHERE project_id = $1 AND role_id = $2 AND display_name IS DISTINCT FROM $3",
+        )
+        .bind(project_id)
+        .bind(role_id)
+        .bind(display_name)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| RepoError(format!("update_room_display_name: {e}")))?;
+        Ok(())
     }
 
     async fn create_message(&self, m: NewMessage) -> Result<MessageRow, RepoError> {

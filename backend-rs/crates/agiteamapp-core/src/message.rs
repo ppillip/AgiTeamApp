@@ -117,18 +117,26 @@ pub async fn collect_message<R: WebguiRepository, P: EventPublisher>(
     let is_inbound = req.message_type == "assistant_message" || req.message_type == "unmatched";
     let direction = if is_inbound { "inbound" } else { "outbound" };
 
-    // correlation 매칭
+    // correlation 매칭 (A안+B안, 유저 승인 2026-06-21):
+    //  - A안: 미매칭 inbound 도 드롭하지 않고 반드시 저장(가시성 복원).
+    //  - B안: '직전 outbound(sent, correlation 유무 무관)' 기준 매칭 → team-CLI 주도 턴도
+    //    정상 inbound 로 잇는다(correlation 있으면 잇고, 없으면 NULL 인 채 received).
+    //  - 방에 outbound 전무한 '고아'만 status='unmatched' 로 식별 보존.
+    //  - 중복 재발은 위 dedup①②(record_id/raw_hash)가 그대로 차단.
     let mut correlation_id = req.correlation_id.clone();
-    let status = if is_inbound { "received".to_string() } else { "sent".to_string() };
-    let message_type = req.message_type.clone();
+    let mut inbound_unmatched = false;
     if is_inbound && correlation_id.is_none() {
-        match repo.find_open_outbound_correlation(&room.room_id).await? {
-            Some(cid) => correlation_id = Some(cid),
-            // 매칭 실패한 inbound 는 영속화하지 않고 스킵(유저 지시 2026-06-20).
-            // touch_room/WS publish 도 생략 — 미매칭 메시지는 DB·UI 어디에도 남기지 않는다.
-            None => return Ok(json!({ "skipped": "unmatched" })),
+        match repo.find_recent_outbound(&room.room_id).await? {
+            Some(ob) => correlation_id = ob.correlation_id,
+            None => inbound_unmatched = true,
         }
     }
+    let status = if is_inbound {
+        if inbound_unmatched { "unmatched".to_string() } else { "received".to_string() }
+    } else {
+        "sent".to_string()
+    };
+    let message_type = req.message_type.clone();
 
     let new_msg = NewMessage {
         room_id: room.room_id.clone(),

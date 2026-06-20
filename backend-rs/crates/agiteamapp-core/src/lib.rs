@@ -41,8 +41,8 @@ pub use transcript::{
 };
 pub use repo::{
     compute_raw_hash, is_activity_role, normalize_event_type, normalize_provider, ApiError,
-    EventRow, MessagePage, MessageRow, NewEvent, NewMessage, ProjectAgg, RepoError, RoomFull,
-    RoomRef, RoomRow, TranscriptHint, WebguiRepository,
+    EventRow, MessagePage, MessageRow, NewEvent, NewMessage, ProjectAgg, RecentOutbound, RepoError,
+    RoomFull, RoomRef, RoomRow, TranscriptHint, WebguiRepository,
 };
 
 #[cfg(test)]
@@ -58,6 +58,10 @@ mod tests {
         messages: Mutex<Vec<MessageRow>>,
         room: Mutex<Option<RoomRow>>,
         open_outbound: Mutex<Option<String>>,
+        // B안 매칭용: 방에 '직전 outbound(sent)'가 있는지(+correlation). None=outbound 없음.
+        recent_outbound: Mutex<Option<RecentOutbound>>,
+        // display_name 별칭 정정 기록 (role_id, display_name).
+        display_name_updates: Mutex<Vec<(String, String)>>,
         msg_seq: Mutex<u64>,
         last_status: Mutex<Option<String>>,
     }
@@ -131,6 +135,27 @@ mod tests {
             _room: &str,
         ) -> Result<Option<String>, RepoError> {
             Ok(self.open_outbound.lock().unwrap().clone())
+        }
+        async fn find_recent_outbound(
+            &self,
+            _room: &str,
+        ) -> Result<Option<RecentOutbound>, RepoError> {
+            Ok(self.recent_outbound.lock().unwrap().clone())
+        }
+        async fn update_room_display_name(
+            &self,
+            _project_id: &str,
+            role_id: &str,
+            display_name: &str,
+        ) -> Result<(), RepoError> {
+            // 가드 동등(빈값/role 동일이면 무기록). 실제 정정만 기록.
+            if !display_name.trim().is_empty() && display_name != role_id {
+                self.display_name_updates
+                    .lock()
+                    .unwrap()
+                    .push((role_id.to_string(), display_name.to_string()));
+            }
+            Ok(())
         }
         async fn create_message(&self, m: NewMessage) -> Result<MessageRow, RepoError> {
             let mut seq = self.msg_seq.lock().unwrap();
@@ -344,8 +369,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_inbound_unmatched_skipped_when_no_open_outbound() {
-        // 유저 지시(2026-06-20): 매칭 실패한 inbound 는 저장하지 않고 스킵.
+    async fn message_inbound_unmatched_stored_as_unmatched_when_no_outbound() {
+        // A안(유저 승인 2026-06-21): 방에 outbound 가 전무한 '고아' assistant inbound 도
+        // 드롭하지 않고 status='unmatched' 로 저장한다(가시성 복원). recent_outbound=None.
         let repo = FakeRepo::with_room("DeveloperBE");
         let req = CollectMessageRequest {
             agent_session_id: None,
@@ -364,9 +390,79 @@ mod tests {
             occurred_at: "2026-06-16T00:00:00Z".into(),
         };
         let out = collect_message(&repo, &NoopPublisher, "room-1", req).await.unwrap();
-        // 비영속 응답: skipped=unmatched, 저장된 message 없음.
-        assert_eq!(out["skipped"], json!("unmatched"));
-        assert!(out.get("message").is_none());
+        // 저장됨: message 존재, 드롭(skipped) 아님.
+        assert!(out.get("skipped").is_none());
+        assert!(out.get("message").is_some());
+        // 고아 식별: 저장된 메시지 status='unmatched', direction=inbound.
+        let stored = repo.messages.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].status, "unmatched");
+        assert_eq!(stored[0].direction, "inbound");
+        assert!(stored[0].correlation_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn message_inbound_matched_to_recent_outbound() {
+        // B안(유저 승인 2026-06-21): 직전 outbound(correlation 유무 무관)가 있으면 assistant
+        // inbound 를 정상 매칭(status='received')하고 correlation 이 있으면 잇는다.
+        let repo = FakeRepo::with_room("DeveloperBE");
+        *repo.recent_outbound.lock().unwrap() =
+            Some(RecentOutbound { correlation_id: Some("corr-9".into()) });
+        let req = CollectMessageRequest {
+            agent_session_id: None,
+            role_id: "DeveloperBE".into(),
+            surface_id: None,
+            source: "transcript".into(),
+            message_type: "assistant_message".into(),
+            provider: Some("claude_code".into()),
+            transcript_path: None,
+            transcript_offset: None,
+            transcript_record_id: None,
+            raw_text: None,
+            normalized_text: "world".into(),
+            raw_hash: None,
+            correlation_id: None,
+            occurred_at: "2026-06-16T00:00:00Z".into(),
+        };
+        let out = collect_message(&repo, &NoopPublisher, "room-1", req).await.unwrap();
+        assert!(out.get("message").is_some());
+        let stored = repo.messages.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].status, "received");
+        assert_eq!(stored[0].direction, "inbound");
+        assert_eq!(stored[0].correlation_id.as_deref(), Some("corr-9"));
+    }
+
+    #[tokio::test]
+    async fn message_inbound_matched_team_cli_turn_null_correlation() {
+        // B안 핵심 회귀 케이스: 직전 outbound 가 team-CLI 수집분(correlation=NULL)이라도
+        // 매칭 성립 → status='received'(고아 unmatched 아님), correlation 은 NULL 유지.
+        let repo = FakeRepo::with_room("Designer");
+        *repo.recent_outbound.lock().unwrap() =
+            Some(RecentOutbound { correlation_id: None });
+        let req = CollectMessageRequest {
+            agent_session_id: None,
+            role_id: "Designer".into(),
+            surface_id: None,
+            source: "transcript".into(),
+            message_type: "assistant_message".into(),
+            provider: Some("codex".into()),
+            transcript_path: None,
+            transcript_offset: None,
+            transcript_record_id: None,
+            raw_text: None,
+            normalized_text: "핑 수신: Designer __PONG_01__".into(),
+            raw_hash: None,
+            correlation_id: None,
+            occurred_at: "2026-06-16T00:00:00Z".into(),
+        };
+        let out = collect_message(&repo, &NoopPublisher, "room-1", req).await.unwrap();
+        assert!(out.get("message").is_some());
+        let stored = repo.messages.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].status, "received");
+        assert_eq!(stored[0].direction, "inbound");
+        assert!(stored[0].correlation_id.is_none());
     }
 
     #[tokio::test]

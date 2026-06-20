@@ -136,6 +136,7 @@ let ws = null;
 const blinker = createActivityBlinker();
 let pollTimer = null; // 선택방 메시지 polling
 let roomsPollTimer = null; // 방 목록/연결상태 + 팀뷰 미리보기 polling
+let projectsPollTimer = null; // 프로젝트 목록/프로젝트단위 연결상태 polling(상단 연결표시·드롭다운 라이브 갱신)
 let artifactPollTimer = null; // 산출물 변경 polling(WG-ART-04 fallback)
 let nowTickTimer = null; // 활동 깜빡 재평가용 1초 reactive 시계(박제버그 수정)
 
@@ -173,6 +174,55 @@ function stopRoomsRefresh() {
   if (roomsPollTimer) {
     clearInterval(roomsPollTimer);
     roomsPollTimer = null;
+  }
+}
+
+// 프로젝트 목록·프로젝트단위 연결상태(adaptProjects의 connection_state)를 라이브 갱신.
+// 상단 'LIVE·PM' 배지와 ProjectSwitcher 점(선택+드롭다운 전 프로젝트)은 모두 store.projects 에서
+// 파생되는데, boot()의 fetchProjects 가 1회성이라 새 프로젝트 세션 연결이 새로고침 전엔 반영되지
+// 않았다. roomsPollTimer 는 '선택 프로젝트'의 방만 갱신 → 다른 프로젝트 연결점·신규 프로젝트 등장은
+// 못 살린다. 그래서 프로젝트 차원의 별도 폴링이 필요하다(프로젝트 전환 stopRealtime 과 무관하게
+// 생존해야 하므로 boot/teardown 생명주기에 묶는다).
+function startProjectsRefresh() {
+  if (projectsPollTimer) return; // 중복 타이머 방지
+  projectsPollTimer = setInterval(async () => {
+    if (store.degraded) return; // 목업 모드에선 폴링 안 함(가짜 연결 위장 금지)
+    try {
+      const { projects } = await api.fetchProjects();
+      mergeProjects(projects);
+    } catch {
+      // 일시 실패는 무시 — 다음 주기 재시도(기존 목록 보존, 깜빡임 없음)
+    }
+  }, 5000);
+}
+function stopProjectsRefresh() {
+  if (projectsPollTimer) {
+    clearInterval(projectsPollTimer);
+    projectsPollTimer = null;
+  }
+}
+
+// fetchProjects 재조회 결과를 기존 store.projects 에 깜빡임 없이 머지(mergeRooms 와 동일 철학).
+//  - 기존 항목: projectId 매칭 → 필드(connected/pmConnected/title/roomCount) 갱신(객체 교체로 reactivity)
+//  - 신규 프로젝트: 목록 끝에 추가(드롭다운 순서 안정 — 선택 항목이 튀지 않게 append)
+//  - 사라진 프로젝트: 제거(세션 종료). 단 현재 선택 중이면 남겨 선택/뷰가 깨지지 않게 보존.
+//  - selectedProjectId 는 절대 건드리지 않는다.
+//  - 비었던 앱(선택 없음)에 프로젝트가 처음 등장하면 boot 와 동일하게 첫 항목 자동 선택(콜드 empty UX).
+function mergeProjects(projects) {
+  if (!Array.isArray(projects)) return;
+  for (const p of projects) {
+    const idx = store.projects.findIndex((x) => x.projectId === p.projectId);
+    if (idx >= 0) store.projects[idx] = { ...store.projects[idx], ...p };
+    else store.projects.push(p);
+  }
+  for (let i = store.projects.length - 1; i >= 0; i--) {
+    const pid = store.projects[i].projectId;
+    const still = projects.some((p) => p.projectId === pid);
+    if (!still && pid !== store.selectedProjectId) store.projects.splice(i, 1);
+  }
+  // 콜드 empty(선택 없음)에서 프로젝트가 막 떴으면 자동 진입(새로고침 불필요). 이미 선택돼 있으면 미관여.
+  if (!store.selectedProjectId && store.projects.length) {
+    selectProject(store.projects[0].projectId);
   }
 }
 let pollCursor = null;
@@ -1061,6 +1111,9 @@ export async function boot() {
       store.messages = [];
       store.treeRoot = null;
     }
+    // 프로젝트 차원 라이브 폴링 시작(연결됨 상태에서만). 새 프로젝트 세션이 떠도 새로고침 없이
+    // 상단 연결표시·드롭다운이 자동 갱신되도록. empty 상태에서도 신규 프로젝트 등장을 감지하려고 가동.
+    startProjectsRefresh();
   } catch (e) {
     if (isOfflineError(e)) {
       // 백엔드 도달 불가 → degraded 모드(mock 으로 화면 유지)
@@ -1556,4 +1609,5 @@ export async function saveArtifact(path, content) {
 
 export function teardown() {
   stopRealtime();
+  stopProjectsRefresh(); // 프로젝트 폴링은 프로젝트 전환(stopRealtime)과 무관 — 앱 종료 시에만 정지
 }

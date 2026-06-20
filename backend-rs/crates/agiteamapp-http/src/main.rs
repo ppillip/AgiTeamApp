@@ -1199,7 +1199,7 @@ async fn main() {
     let projects_base =
         std::env::var("AGITEAMAPP_PROJECTS_BASE").unwrap_or_else(|_| "/Users/ppillip/Projects".to_string());
 
-    let repo = PgRepository::connect(&database_url).await.expect("DB 연결 실패");
+    let repo = Arc::new(PgRepository::connect(&database_url).await.expect("DB 연결 실패"));
 
     // discovery: 백그라운드로 mux.tree() 폴링 → connection_state/projects 갱신.
     let discovery = Arc::new(DiscoveryRegistry::new());
@@ -1211,6 +1211,7 @@ async fn main() {
     {
         let disc = discovery.clone();
         let mux_for_loop = mux.clone();
+        let repo_for_loop = repo.clone();
         // 실시간성: discovery 폴링 기본 1000ms(AGITEAMAPP_DISCOVERY_POLL_MS 로 조정).
         let poll_ms = mux_config.discovery_poll_ms;
         tokio::spawn(async move {
@@ -1222,6 +1223,14 @@ async fn main() {
                         .map(|d| d.as_secs() as i64)
                         .unwrap_or(0);
                     disc.refresh_from_workspaces(&workspaces, now);
+                    // room.display_name 을 discovery 해소 별칭으로 동기화(역할명 표시 결함 정정).
+                    // 방이 없으면 no-op(신규 방은 생성 후 다음 폴에서 자동 정정 → 회귀 방지).
+                    // 가드(빈값/role 동일/무변화)는 repo 구현이 처리하므로 매 폴 호출해도 무의미 write 없음.
+                    for (project_id, role_id, display_name) in disc.connected_display_names() {
+                        let _ = repo_for_loop
+                            .update_room_display_name(&project_id, &role_id, &display_name)
+                            .await;
+                    }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
             }
@@ -1248,7 +1257,7 @@ async fn main() {
     }
 
     let state = AppState {
-        repo: Arc::new(repo),
+        repo,
         activity: Arc::new(ActivityRegistry::new()),
         hub: hub_for_watch,
         mux,

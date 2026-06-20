@@ -184,6 +184,18 @@ impl DiscoveryRegistry {
         self.inner.lock().unwrap().selected.clone()
     }
 
+    /// connected surface 들의 (project_id, role_id, display_name).
+    /// room.display_name 을 discovery 해소 별칭으로 동기화(역할명 표시 결함 정정)하는 데 쓴다.
+    pub fn connected_display_names(&self) -> Vec<(String, String, String)> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .map
+            .values()
+            .filter(|i| i.connection_state == "connected")
+            .map(|i| (i.project_id.clone(), i.role_id.clone(), i.display_name.clone()))
+            .collect()
+    }
+
     /// projects() — DS-40 ProjectSummary 원천(역할 목록 포함).
     pub fn projects(&self) -> Vec<Value> {
         let inner = self.inner.lock().unwrap();
@@ -220,5 +232,50 @@ impl DiscoveryRegistry {
             }));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ws(title: &str, surfaces: Vec<MuxSurface>) -> MuxWorkspace {
+        MuxWorkspace { workspace_id: "ws:1".into(), title: title.into(), selected: true, surfaces }
+    }
+    fn surf(id: &str, title: &str) -> MuxSurface {
+        MuxSurface { surface_id: id.into(), title: title.into(), is_terminal: true }
+    }
+
+    #[test]
+    fn connected_display_names_exposes_parsed_alias() {
+        // mumu 팬 제목 '박피엠(PM)' → display_name='박피엠', role='PM'.
+        let reg = DiscoveryRegistry::new();
+        reg.refresh_from_workspaces(
+            &[ws("mumu", vec![surf("surface:77", "박피엠(PM)"), surf("surface:74", "박개발(DeveloperBE)")])],
+            100,
+        );
+        let mut got = reg.connected_display_names();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("mumu".to_string(), "DeveloperBE".to_string(), "박개발".to_string()),
+                ("mumu".to_string(), "PM".to_string(), "박피엠".to_string()),
+            ]
+        );
+        // 별칭이 role 과 달라 정정 대상임을 확인(표시 결함 정정의 입력).
+        for (_p, role, display) in got {
+            assert_ne!(role, display);
+            assert!(!display.is_empty());
+        }
+    }
+
+    #[test]
+    fn connected_display_names_excludes_disconnected() {
+        let reg = DiscoveryRegistry::new();
+        reg.refresh_from_workspaces(&[ws("mumu", vec![surf("surface:77", "박피엠(PM)")])], 100);
+        // 다음 폴에서 사라짐 → disconnected.
+        reg.refresh_from_workspaces(&[ws("mumu", vec![])], 200);
+        assert!(reg.connected_display_names().is_empty());
     }
 }

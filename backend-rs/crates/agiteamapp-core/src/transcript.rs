@@ -276,12 +276,27 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         }
 
         let mut correlation_id: Option<String> = None;
+        // assistant inbound correlation 매칭 (A안+B안, 유저 승인 2026-06-21):
+        //  - A안(가시성 복원): 미매칭이어도 절대 드롭하지 않고 반드시 저장한다.
+        //  - B안(correlation 정합): '직전 outbound(sent, correlation 유무 무관)' 존재를 매칭
+        //    성립 기준으로 삼아 team-CLI 주도 턴(outbound.correlation_id=NULL)도 정상 inbound 로
+        //    잇는다. correlation 이 있으면 이어 잇고(Some), 없으면 NULL 인 채 received 로 저장.
+        //  - 방에 outbound 가 전무한 '고아' assistant 만 status='unmatched' 로 식별 보존.
+        //  - 2026-06-20 드롭 룰이 막으려던 중복/노이즈는 아래 dedup(record_id ON CONFLICT /
+        //    raw_hash 사전체크)이 그대로 차단하므로 재발하지 않는다.
+        let mut assistant_unmatched = false;
+        if is_assistant {
+            match repo.find_recent_outbound(room_id).await? {
+                Some(ob) => correlation_id = ob.correlation_id,
+                None => assistant_unmatched = true,
+            }
+        }
         // 시스템 메시지: status=received(중립 inbound), message_type=status(DB CHECK 정식값).
         //   DB ck_webgui_message_type 은 'system' 을 불허 → 시스템류 정식값 'status' 채택.
         let status = if is_system {
             "received".to_string()
         } else if is_assistant {
-            "received".to_string()
+            if assistant_unmatched { "unmatched".to_string() } else { "received".to_string() }
         } else {
             "sent".to_string()
         };
@@ -290,15 +305,6 @@ pub async fn store_records<R: WebguiRepository, P: EventPublisher>(
         } else {
             rec.kind.clone()
         };
-        // assistant 만 outbound correlation 매칭. 시스템 메시지는 correlation/dedup 로직 미적용.
-        if is_assistant {
-            match repo.find_open_outbound_correlation(room_id).await? {
-                Some(cid) => correlation_id = Some(cid),
-                // 매칭 실패한 assistant inbound 는 저장하지 않고 스킵(유저 지시 2026-06-20).
-                // offset 은 edge 소유라 continue 로 건너뛰어도 안전(stored 미증가).
-                None => continue,
-            }
-        }
         let occurred = match rec.occurred_at.clone() {
             Some(o) => o,
             None => repo.server_now().await?,

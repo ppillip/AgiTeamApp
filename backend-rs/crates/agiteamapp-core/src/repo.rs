@@ -195,6 +195,14 @@ pub struct TranscriptHint {
     pub room_id: String,
 }
 
+/// 방의 '직전 outbound(sent)' 매칭 결과 (B안 correlation 정합 보강).
+/// 존재 자체가 매칭 성립(assistant inbound 를 정상 짝지음)을 의미하고,
+/// correlation_id 는 그 outbound 가 가졌으면 잇고(Some) 없으면 None(team-CLI 주도 턴).
+#[derive(Debug, Clone)]
+pub struct RecentOutbound {
+    pub correlation_id: Option<String>,
+}
+
 /// 전송·DB 무관 저장 포트. agiteamapp-db(sqlx)가 구현한다.
 pub trait WebguiRepository: Send + Sync {
     async fn upsert_room(
@@ -224,11 +232,29 @@ pub trait WebguiRepository: Send + Sync {
         raw_hash: &str,
     ) -> Result<Option<MessageRow>, RepoError>;
 
-    /// 방의 가장 최근 미닫힘 outbound 의 correlation_id.
+    /// 방의 가장 최근 미닫힘 outbound 의 correlation_id (correlation_id IS NOT NULL 한정).
     async fn find_open_outbound_correlation(
         &self,
         room_id: &str,
     ) -> Result<Option<String>, RepoError>;
+
+    /// 방의 '직전 outbound(sent)' 1건 (correlation 유무 무관). 없으면 None.
+    /// B안: team-CLI 주도 턴(outbound.correlation_id=NULL)도 assistant inbound 를
+    /// 정상 매칭(드롭 아님)하기 위한 매칭 기준. correlation 이 있으면 이어서 잇는다.
+    async fn find_recent_outbound(
+        &self,
+        room_id: &str,
+    ) -> Result<Option<RecentOutbound>, RepoError>;
+
+    /// discovery 해소 별칭으로 방 display_name 을 정정한다(역할명 표시 결함 방지).
+    /// 무의미 갱신 방지: 별칭이 비었거나 role 과 같으면 구현이 스킵하고, 값이 실제로
+    /// 달라질 때만 UPDATE 한다(방이 없으면 no-op — 신규 방은 생성 후 다음 폴에서 정정).
+    async fn update_room_display_name(
+        &self,
+        project_id: &str,
+        role_id: &str,
+        display_name: &str,
+    ) -> Result<(), RepoError>;
 
     async fn create_message(&self, m: NewMessage) -> Result<MessageRow, RepoError>;
 
