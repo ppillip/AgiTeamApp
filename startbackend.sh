@@ -40,8 +40,17 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-echo "[backend] stopping existing agiteamapp-http process, if any"
-pkill -f 'target/release/agiteamapp-http' || true
+if existing_pids="$(pgrep -f 'target/release/agiteamapp-http')"; then
+  echo "[backend] killing existing agiteamapp-http (pid: ${existing_pids//$'\n'/ })"
+  kill $existing_pids || true
+  sleep 1
+  if remaining_pids="$(pgrep -f 'target/release/agiteamapp-http')"; then
+    echo "[backend] force killing existing agiteamapp-http (pid: ${remaining_pids//$'\n'/ })"
+    kill -9 $remaining_pids || true
+  fi
+else
+  echo "[backend] no existing agiteamapp-http process found"
+fi
 
 if [ "$BUILD" -eq 1 ]; then
   echo "[backend] building release binary"
