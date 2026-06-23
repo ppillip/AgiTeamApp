@@ -1,6 +1,14 @@
 .DS_Store
 node_modules
 /dist
+**/node_modules/
+**/dist/
+**/build/
+**/target/
+**/.next/
+**/.vite/
+**/.turbo/
+**/coverage/
 /.vite
 .env
 .env.*
